@@ -1,0 +1,23 @@
+# tests/conftest.py
+import pytest
+from fastapi.testclient import TestClient
+import os
+import sys
+
+# Add the parent directory to PYTHONPATH
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Mock environment variables for testing
+os.environ["OPENAI_API_KEY"] = "test_openai_key"
+os.environ["ANTHROPIC_API_KEY"] = "test_anthropic_key"
+os.environ["GOOGLE_API_KEY"] = "test_google_key"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["JWT_SECRET"] = "test_secret_key"
+
+# Import app after setting environment variables
+from main import app
+
+@pytest.fixture
+def client():
+    """Return a FastAPI TestClient"""
+    return TestClient(app)
