@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Environment
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local development
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Documentation and non-essential files
+docs/
+*.md
+LICENSE
+tests/
+
+# Data directories (if any)
+/data/
