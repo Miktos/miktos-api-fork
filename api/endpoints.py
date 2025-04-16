@@ -1,5 +1,6 @@
 # miktos_backend/api/endpoints.py
 
+import datetime
 from fastapi import APIRouter, HTTPException, Body
 # from fastapi.responses import StreamingResponse # We are using EventSourceResponse instead
 from sse_starlette.sse import EventSourceResponse # Need this for streaming
@@ -8,10 +9,23 @@ import json # Needed for serializing data in SSE
 
 # Import our request/response models and the orchestrator function
 from .models import GenerateRequest, GenerateResponse # Import both models
-from miktos_backend.core import orchestrator
+from core import orchestrator
 
 # Create an API router
 router = APIRouter()
+
+# Assuming 'router' is your existing APIRouter instance
+@router.get(
+    "/health",
+    tags=["System"],
+    summary="Health check endpoint"
+)
+async def health_check():
+    """
+    Simple health check endpoint that returns OK if the API is running.
+    Does not check database or external service connectivity.
+    """
+    return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()}
 
 # Define the generation endpoint
 # Added response_model=GenerateResponse for non-streaming success cases

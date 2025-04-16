@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any, Union
 from passlib.context import CryptContext
 
-from miktos_backend.models.database import User
-from miktos_backend.repositories.base_repository import BaseRepository
-from miktos_backend.schemas.user import UserCreate, UserUpdate
+from models.database import User
+from repositories.base_repository import BaseRepository
+from schemas.user import UserCreate, UserUpdate
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

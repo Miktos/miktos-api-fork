@@ -6,9 +6,9 @@ from typing import List, Dict, Any, Generator, Optional, Union, AsyncGenerator #
 # Import the generation functions from our integration clients
 # Use absolute imports relative to the miktos_backend package root
 # Assume these client functions are now defined as 'async def'
-from miktos_backend.integrations import openai_client
-from miktos_backend.integrations import claude_client
-from miktos_backend.integrations import gemini_client
+from integrations import openai_client
+from integrations import claude_client
+from integrations import gemini_client
 
 # --- Model Provider Mapping (Simple Approach for MVP) ---
 def get_provider_from_model(model_id: str) -> Optional[str]:

@@ -7,24 +7,28 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - DATABASE_URL= "sqlite:///:memory:"
+      - OPENAI_API_KEY= "test_key"
+      - ANTHROPIC_API_KEY= "test_key"
+      - GOOGLE_API_KEY= "test_key"
       - PORT=8000
-      - DEBUG=${DEBUG:-False}
+      - DEBUG= "True"
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - JWT_SECRET=${JWT_SECRET}
     volumes:
       - ./data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
-  # Commented out database service - uncomment if needed
+  test:
+    build: .
+    environment:
+      - DATABASE_URL="sqlite:///:memory:"
+      - OPENAI_API_KEY= "test_key"
+      - ANTHROPIC_API_KEY= "test_key"
+      - GOOGLE_API_KEY= "test_key"
+      - DEBUG=True
+    command: ["pytest", "-v"]
+
+  # Uncomment the database service when you're ready to use it
   # db:
   #   image: postgres:14-alpine
   #   restart: unless-stopped
@@ -34,11 +38,8 @@ services:
   #     - POSTGRES_DB=${DB_NAME}
   #   volumes:
   #     - postgres_data:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
 
+# Only uncomment this if you uncomment the db service above
 # volumes:
 #   postgres_data:
+

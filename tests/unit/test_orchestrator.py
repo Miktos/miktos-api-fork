@@ -5,7 +5,6 @@ import sys
 import os
 
 # Add the parent directory to PYTHONPATH
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from core import orchestrator
 
@@ -17,7 +16,8 @@ async def test_process_generation_request_model_selection():
     test_messages = [{"role": "user", "content": "Hello"}]
     
     # Test OpenAI routing
-    with patch('core.orchestrator.openai_client.generate', new_callable=AsyncMock) as mock_openai:
+    # Patch 'generate_completion' NOT 'generate'
+    with patch('core.orchestrator.openai_client.generate_completion', new_callable=AsyncMock) as mock_openai:
         mock_openai.return_value = {"content": "OpenAI response"}
         
         result = await orchestrator.process_generation_request(
@@ -30,7 +30,8 @@ async def test_process_generation_request_model_selection():
         assert "content" in result
         
     # Test Claude routing
-    with patch('core.orchestrator.claude_client.generate', new_callable=AsyncMock) as mock_claude:
+    # Patch 'generate_completion' NOT 'generate'
+    with patch('core.orchestrator.claude_client.generate_completion', new_callable=AsyncMock) as mock_claude:
         mock_claude.return_value = {"content": "Claude response"}
         
         result = await orchestrator.process_generation_request(
@@ -40,4 +41,17 @@ async def test_process_generation_request_model_selection():
         )
         
         mock_claude.assert_called_once()
+        assert "content" in result
+
+    # Test Gemini routing
+    # Patch 'generate_completion' NOT 'generate'
+    with patch('core.orchestrator.gemini_client.generate_completion', new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = {"content": "Gemini response"}
+
+        result = await orchestrator.process_generation_request(
+            messages=test_messages,
+            model="google/gemini-pro", # Or similar gemini model ID
+            stream=False
+        )
+        mock_gemini.assert_called_once()
         assert "content" in result

@@ -2,7 +2,7 @@
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from miktos_backend.models.database import Base
+from models.database import Base
 
 # Import Base from our models
 from models.database import Base

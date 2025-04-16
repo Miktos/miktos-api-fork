@@ -7,7 +7,7 @@ import asyncio
 import traceback  # Add traceback for detailed debugging
 
 # Import our settings loader
-from miktos_backend.config import settings
+from config import settings
 
 # Initialize the ASYNC Anthropic client
 if settings.ANTHROPIC_API_KEY:

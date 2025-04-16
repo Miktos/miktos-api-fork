@@ -4,10 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 # Import the endpoints module
-from miktos_backend.api import endpoints
+from api import endpoints
 
 # Import database dependency - we'll uncomment this after setting up dependencies
-# from miktos_backend.dependencies import get_db
+# from dependencies import get_db
 
 # Initialize the FastAPI app
 app = FastAPI(

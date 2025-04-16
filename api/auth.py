@@ -5,10 +5,10 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
-from miktos_backend.dependencies import get_db, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from miktos_backend.repositories.user_repository import UserRepository
-from miktos_backend.schemas.user import UserCreate, UserResponse
-from miktos_backend.schemas.token import Token
+from dependencies import get_db, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from repositories.user_repository import UserRepository
+from schemas.user import UserCreate, UserResponse
+from schemas.token import Token
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 

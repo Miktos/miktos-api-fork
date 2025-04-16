@@ -6,7 +6,7 @@ from typing import List, Dict, Any, AsyncGenerator, Optional, Union
 import traceback
 
 # Import our settings loader
-from miktos_backend.config import settings
+from config import settings
 
 # Initialize the ASYNC OpenAI client
 if settings.OPENAI_API_KEY:
