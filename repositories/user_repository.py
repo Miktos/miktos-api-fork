@@ -3,8 +3,9 @@
 from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any, Union
 from passlib.context import CryptContext
+import bcrypt
 
-from models.database import User
+from models.database_models import User
 from repositories.base_repository import BaseRepository
 from schemas.user import UserCreate, UserUpdate
 
@@ -14,6 +15,10 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 class UserRepository(BaseRepository[User, UserCreate]):
     def __init__(self, db: Session):
         super().__init__(User, db)
+    
+    def get_by_id(self, user_id: str) -> Optional[User]:
+        """Get a user by ID."""
+        return self.db.query(User).filter(User.id == user_id).first()
     
     def get_by_username(self, username: str) -> Optional[User]:
         """Get a user by username."""
@@ -25,10 +30,12 @@ class UserRepository(BaseRepository[User, UserCreate]):
     
     def create(self, obj_in: UserCreate) -> User:
         """Create a new user with password hashing."""
+        hashed_password = self._hash_password(obj_in.password)
+        
         db_obj = User(
             username=obj_in.username,
             email=obj_in.email,
-            password_hash=self._hash_password(obj_in.password),
+            hashed_password=hashed_password,
             is_active=True
         )
         self.db.add(db_obj)
@@ -41,27 +48,27 @@ class UserRepository(BaseRepository[User, UserCreate]):
         if isinstance(obj_in, dict):
             update_data = obj_in
             if "password" in update_data:
-                update_data["password_hash"] = self._hash_password(update_data.pop("password"))
+                update_data["hashed_password"] = self._hash_password(update_data.pop("password"))
         else:
             update_data = obj_in.dict(exclude_unset=True)
             if update_data.get("password"):
-                update_data["password_hash"] = self._hash_password(update_data.pop("password"))
+                update_data["hashed_password"] = self._hash_password(update_data.pop("password"))
         
         return super().update(db_obj, update_data)
     
-    def authenticate(self, username: str, password: str) -> Optional[User]:
-        """Authenticate a user by username and password."""
-        user = self.get_by_username(username)
-        if not user or not self.verify_password(password, user.password_hash):
+    def authenticate(self, email: str, password: str) -> Optional[User]:
+        """Authenticate a user by email and password."""
+        user = self.get_by_email(email)
+        if not user or not self.verify_password(password, user.hashed_password):
             return None
         return user
     
     @staticmethod
     def _hash_password(password: str) -> str:
         """Hash a password for storing."""
-        return pwd_context.hash(password)
+        return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verify a stored password against a provided password."""
-        return pwd_context.verify(plain_password, hashed_password)
+        return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())

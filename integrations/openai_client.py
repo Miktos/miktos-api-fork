@@ -6,7 +6,7 @@ from typing import List, Dict, Any, AsyncGenerator, Optional, Union
 import traceback
 
 # Import our settings loader
-from config import settings
+from config.settings import settings
 
 # Initialize the ASYNC OpenAI client
 if settings.OPENAI_API_KEY:

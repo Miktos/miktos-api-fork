@@ -1,63 +1,66 @@
 # miktos_backend/repositories/base_repository.py
-
-from sqlalchemy.orm import Session
-from typing import Generic, TypeVar, Type, List, Optional, Dict, Any, Union
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-# Generic type for SQLAlchemy models
-ModelType = TypeVar("ModelType")
-# Generic type for Pydantic schemas
-SchemaType = TypeVar("SchemaType", bound=BaseModel)
+from models.database_models import Base
 
-class BaseRepository(Generic[ModelType, SchemaType]):
-    """Base class for all repositories."""
-    
+ModelType = TypeVar("ModelType", bound=Base)
+CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
+UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
+
+class BaseRepository(Generic[ModelType, CreateSchemaType]):
     def __init__(self, model: Type[ModelType], db: Session):
+        """
+        CRUD repository with default methods to Create, Read, Update, Delete (CRUD).
+        
+        **Parameters**
+        * `model`: A SQLAlchemy model class
+        * `db`: A SQLAlchemy database session
+        """
         self.model = model
         self.db = db
     
-    def get(self, id: int) -> Optional[ModelType]:
-        """Get an item by ID."""
+    def get(self, id: Any) -> Optional[ModelType]:
+        """Get a record by ID."""
         return self.db.query(self.model).filter(self.model.id == id).first()
     
-    def get_all(self, skip: int = 0, limit: int = 100) -> List[ModelType]:
-        """Get all items with pagination."""
+    def get_multi(self, *, skip: int = 0, limit: int = 100) -> List[ModelType]:
+        """Get multiple records."""
         return self.db.query(self.model).offset(skip).limit(limit).all()
     
-    def create(self, obj_in: Union[SchemaType, Dict[str, Any]]) -> ModelType:
-        """Create a new item."""
-        if isinstance(obj_in, dict):
-            obj_data = obj_in
-        else:
-            obj_data = obj_in.dict(exclude_unset=True)
-        
-        db_obj = self.model(**obj_data)
+    def create(self, *, obj_in: CreateSchemaType) -> ModelType:
+        """Create a new record."""
+        obj_in_data = obj_in.dict()
+        db_obj = self.model(**obj_in_data)
         self.db.add(db_obj)
         self.db.commit()
         self.db.refresh(db_obj)
         return db_obj
     
-    def update(self, db_obj: ModelType, obj_in: Union[SchemaType, Dict[str, Any]]) -> ModelType:
-        """Update an existing item."""
+    def update(self, db_obj: ModelType, obj_in: Union[UpdateSchemaType, Dict[str, Any]]) -> ModelType:
+        """Update a record."""
+        obj_data = jsonable_encoder(db_obj)
+        
         if isinstance(obj_in, dict):
             update_data = obj_in
         else:
             update_data = obj_in.dict(exclude_unset=True)
         
-        for field, value in update_data.items():
-            if hasattr(db_obj, field):
-                setattr(db_obj, field, value)
+        for field in obj_data:
+            if field in update_data:
+                setattr(db_obj, field, update_data[field])
         
         self.db.add(db_obj)
         self.db.commit()
         self.db.refresh(db_obj)
         return db_obj
     
-    def delete(self, id: int) -> bool:
-        """Delete an item by ID."""
+    def remove(self, id: Any) -> Optional[ModelType]:
+        """Delete a record."""
         obj = self.db.query(self.model).get(id)
-        if not obj:
-            return False
-        self.db.delete(obj)
-        self.db.commit()
-        return True
+        if obj:
+            self.db.delete(obj)
+            self.db.commit()
+        return obj

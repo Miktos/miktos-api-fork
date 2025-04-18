@@ -8,7 +8,7 @@ import asyncio
 import traceback # Import traceback
 
 # Import our settings loader
-from config import settings
+from config.settings import settings
 
 # Configure the Google AI client
 if settings.GOOGLE_API_KEY:
