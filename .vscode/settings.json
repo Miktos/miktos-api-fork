@@ -4,6 +4,8 @@
     ],
     "python.linting.enabled": true,
     "python.analysis.usePullDiagnostics": true,
-    "python.analysis.diagnosticSeverityOverrides": {}
+    "python.analysis.diagnosticSeverityOverrides": {
+        
+    }
 }
 

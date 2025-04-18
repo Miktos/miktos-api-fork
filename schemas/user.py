@@ -1,7 +1,7 @@
 # miktos_backend/schemas/user.py
 
-from pydantic import BaseModel, EmailStr, Field # Added Field for potential future use
-from typing import Optional, List, Dict, Any # Added Dict, Any for potential use
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 # ==============================================================================
@@ -34,16 +34,6 @@ class UserRead(UserBase):
     class Config:
         from_attributes = True # Enable ORM mode (SQLAlchemy model -> Pydantic schema)
 
-# You might want a separate response model if UserRead exposes too much
-# class UserResponse(BaseModel):
-#     id: str
-#     username: str
-#     email: EmailStr
-#     is_active: bool
-#     created_at: datetime
-#     class Config:
-#         from_attributes = True
-
 # ==============================================================================
 # Project Schemas
 # ==============================================================================
@@ -73,7 +63,7 @@ class ProjectUpdate(BaseModel):
     context_notes: Optional[str] = None
 
 # ==============================================================================
-# Message Schemas (Example - Adapt as needed)
+# Message Schemas
 # ==============================================================================
 
 class MessageBase(BaseModel):
@@ -84,6 +74,14 @@ class MessageBase(BaseModel):
 class MessageCreate(MessageBase):
     # When creating, associate with a project
     project_id: str
+
+# --- ADDED THIS SCHEMA ---
+class MessageUpdate(BaseModel):
+    # Define fields that can be updated for a message
+    # Typically, you might only allow content updates, or maybe metadata
+    content: Optional[str] = None
+    # metadata: Optional[Dict[str, Any]] = None # Example if you store metadata
+# --- END ADDITION ---
 
 class MessageRead(MessageBase):
     id: str
