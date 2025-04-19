@@ -119,6 +119,10 @@ async def generate_completion_endpoint(
 
                 try:
                     async for chunk_dict in result_or_stream: # Assuming orchestrator yields dicts
+                        # --- ADDED: Log the exact chunk dict from orchestrator ---
+                        print(f"DEBUG BACKEND YIELDING CHUNK: {chunk_dict}")
+                        # --- END ADDED ---
+
                         # Attempt to serialize chunk safely
                         try:
                             chunk_data = json.dumps(chunk_dict)
@@ -127,11 +131,11 @@ async def generate_completion_endpoint(
                             yield {"event": "error", "data": json.dumps(error_chunk)}
                             continue # Skip this chunk
 
-                        # Extract info for saving and yielding
-                        delta = chunk_dict.get("delta")
-                        is_final = chunk_dict.get("is_final", False)
-                        is_error = chunk_dict.get("error", False)
-                        chunk_model = chunk_dict.get("model_name")
+                        # Extract info for saving and yielding (ensure keys match logged chunk_dict)
+                        delta = chunk_dict.get("delta") # Modify this key if needed based on logs
+                        is_final = chunk_dict.get("is_final", False) # Modify if needed
+                        is_error = chunk_dict.get("error", False) # Modify if needed
+                        chunk_model = chunk_dict.get("model_name") # Modify if needed
 
                         if chunk_model: model_used = chunk_model
                         if delta: accumulated_content += delta
@@ -144,9 +148,8 @@ async def generate_completion_endpoint(
                             # --- Stream finished: Save conversation if project_id exists ---
                             if project_id and not is_error:
                                 try:
-                                    # --- FIX: Use request.messages directly (it's already a list of dicts) ---
-                                    messages_to_save = request.messages.copy() # Copy the list of dicts
-                                    # --- END FIX ---
+                                    # Use request.messages directly (it's already a list of dicts)
+                                    messages_to_save = request.messages.copy()
                                     messages_to_save.append({
                                         "role": "assistant",
                                         "content": accumulated_content
@@ -182,9 +185,8 @@ async def generate_completion_endpoint(
                  try:
                     # Instantiate MessageRepository
                     message_repo = MessageRepository(db=db)
-                    # --- FIX: Use request.messages directly (it's already a list of dicts) ---
-                    messages_to_save = request.messages.copy() # Copy the list of dicts
-                    # --- END FIX ---
+                    # Use request.messages directly (it's already a list of dicts)
+                    messages_to_save = request.messages.copy()
                     # Assuming result_or_stream is a dict with 'content' and maybe 'model_name'
                     assistant_content = result_or_stream.get("content", "") if isinstance(result_or_stream, dict) else ""
                     model_used = result_or_stream.get("model_name", request.model) if isinstance(result_or_stream, dict) else request.model
