@@ -3,6 +3,9 @@ from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, DateT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from config.database import Base
+from sqlalchemy.orm import relationship # Ensure this is imported
+from sqlalchemy import Column, ForeignKey, String, Text, DateTime, JSON # Ensure ForeignKey is imported
+from sqlalchemy.orm import relationship # Ensure relationship is imported
 import uuid
 
 def generate_uuid():
@@ -21,6 +24,7 @@ class User(Base):
 
     # Relationships
     projects = relationship("Project", back_populates="owner")
+    messages = relationship("Message", back_populates="user")
     
 class Project(Base):
     __tablename__ = "projects"
@@ -41,12 +45,14 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    project_id = Column(String, ForeignKey("projects.id"))
-    role = Column(String)  # 'user' or 'assistant'
-    content = Column(Text)
-    model = Column(String, nullable=True)  # Which model generated the message (for assistant messages)
-    message_metadata = Column(JSON, nullable=True)  # Additional metadata like tokens, settings used, etc.
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False, index=True) # Added nullable=False, index=True
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True) # <--- ADD THIS COLUMN
+    role = Column(String, nullable=False) # 'user' or 'assistant' # Added nullable=False
+    content = Column(Text, nullable=False) # Added nullable=False
+    model = Column(String, nullable=True)
+    message_metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False) # Added nullable=False
 
     # Relationships
     project = relationship("Project", back_populates="messages")
+    user = relationship("User", back_populates="messages") # <--- ADD THIS RELATIONSHIP

@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 # Import modules containing routers
-# Ensure these modules exist and contain correctly configured 'router' objects
 from api import endpoints, auth, projects
 
 # Import database configuration and base model
@@ -22,16 +21,15 @@ except Exception as e:
 app = FastAPI(
     title="Miktós AI Orchestrator",
     description="A platform to interact with multiple AI models via a unified interface.",
-    version="0.2.0" # Updated version for Phase 2 completion target
+    version="0.2.0"
 )
 
 # --- CORS Middleware ---
-# Define allowed origins for your frontend development server(s)
 origins = [
     "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:8080",
+    "http://localhost:5173", # Default Vite port
+    "http://localhost:5174", # Sometimes Vite uses next port
+    "http://localhost:8080", # Common alternative dev port
     "http://localhost",
     # Add your deployed frontend URL here when ready
 ]
@@ -40,37 +38,45 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"], # Allows all methods
+    allow_headers=["*"], # Allows all headers
 )
 
 # --- Include API routers ---
 
-# General Endpoints Router
-# Assumes prefix="/api/v1" is needed here because paths like "/health"
-# are defined directly in endpoints.router without a prefix.
-# Tags defined here.
+# General Endpoints Router (e.g., /health, /generate)
+# Prefix is applied here because router in endpoints.py might not have it.
 app.include_router(
     endpoints.router,
-    prefix="/api/v1",
-    tags=["General"]
+    prefix="/api/v1", # Base prefix for general endpoints
+    tags=["General"]   # Tag for docs grouping
 )
 
 # Authentication Router
-# Assumes prefix="/api/v1/auth" and tags=["Authentication"]
-# are defined INSIDE api/auth.py on its APIRouter.
-# Include without prefix or tags here.
+# Assuming prefix "/api/v1/auth" is defined within api/auth.py router itself
 app.include_router(auth.router)
 
 # Projects Router
-# Assumes prefix="/api/v1/projects" and tags=["Projects"]
-# are defined INSIDE api/projects.py on its APIRouter.
-# Include without prefix or tags here.
-app.include_router(projects.router) # <-- REMOVED tags=["Projects"]
+# --- CORRECTION: Add prefix here as it's not defined in api/projects.py ---
+app.include_router(
+    projects.router,
+    prefix="/api/v1/projects", # Apply the correct prefix
+    # Tags are already defined in api/projects.py, but specifying here doesn't hurt
+    # and can override if needed. Let's keep it consistent with how tags are defined there.
+    # tags=["Projects"] # Redundant if already tagged in projects.py
+)
 
 
 # --- Root Endpoint ---
-@app.get("/", tags=["Root"]) # Tag for the root endpoint
+@app.get("/", tags=["Root"])
 async def root():
     """Provides a simple welcome message for the API root."""
     return {"message": "Welcome to Miktós AI Orchestration Platform API"}
+
+# --- (Optional) Health Check Endpoint ---
+# Often useful, can be added to endpoints.py or here
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Simple health check endpoint."""
+    # Could add DB connection check here if needed
+    return {"status": "ok"}

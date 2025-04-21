@@ -1,26 +1,28 @@
 # miktos_backend/api/endpoints.py
 import datetime
-from fastapi import APIRouter, HTTPException, Body, Depends, Query, status
-from sse_starlette.sse import EventSourceResponse
-import asyncio
-import json
+import json # Keep for potential error formatting if needed
+from fastapi import APIRouter, HTTPException, Body, Depends, status
+from fastapi.responses import StreamingResponse # Import StreamingResponse from fastapi
 from sqlalchemy.orm import Session
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncGenerator # Added AsyncGenerator
 
 # Import Pydantic Schemas used in this router
-# Import generation schemas directly from api/models.py
-from .models import GenerateRequest, GenerateResponse # Assuming these are Pydantic models defined here
+# Import generation schemas directly from api/models.py (or wherever defined)
+from .models import GenerateRequest # Ensure this exists and includes project_id
 
 # Import DB session and models
-from config.database import get_db
-from models.database_models import User # Import User model for type hint
+# Assuming get_db is defined in 'dependencies.py' or similar
+from dependencies import get_db
+from models.database_models import User
 
-# Import Auth dependency and Repository Classes
+# Import Auth dependency and Repository Classes (only if needed for checks)
 from api.auth import get_current_user
-from repositories.message_repository import MessageRepository # Import CLASS
-from repositories.project_repository import ProjectRepository # Import CLASS
+# Remove MessageRepository import - orchestrator handles saving
+# from repositories.message_repository import MessageRepository
+from repositories.project_repository import ProjectRepository # Keep if doing ownership check
 
 # Import the core logic handler
+# Ensure orchestrator has the refactored process_generation_request
 from core import orchestrator
 
 # Create an API router (prefix is handled in main.py)
@@ -29,189 +31,93 @@ router = APIRouter()
 # Health check endpoint
 @router.get(
     "/health",
-    # tags=["System"], # Tags defined in main.py for this router
     summary="Health check endpoint"
+    # Tags applied in main.py
 )
 async def health_check():
     """Simple health check endpoint that returns OK if the API is running."""
     return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()}
 
-# Generation endpoint with optional project context
+# Generation endpoint
 @router.post(
     "/generate",
-    # tags=["Generation"], # Tags defined in main.py for this router
-    # response_model=GenerateResponse, # Removing as actual response varies (stream/dict)
-    summary="Generate AI completion, optionally linking to a project"
+    response_class=StreamingResponse, # Correct response class for streaming
+    summary="Generate AI completion and store conversation",
+    # Tags applied in main.py
 )
 async def generate_completion_endpoint(
-    # Require authentication for this endpoint
+    payload: GenerateRequest = Body(...), # Use the schema, includes project_id
     current_user: User = Depends(get_current_user),
-    # Require the main request body (validated against GenerateRequest schema)
-    request: GenerateRequest = Body(...),
-    # Project ID is an optional query parameter
-    project_id: Optional[str] = Query(
-        None,
-        description="Optional ID of the project to associate conversation history with."
-    ),
-    # DB Session Dependency
     db: Session = Depends(get_db)
-    # Return type depends on streaming, Any is safest for now
-) -> Any:
+    # Return type is handled by response_class
+) -> StreamingResponse:
     """
-    Generates a completion from an AI model specified in the request body.
+    Generates a completion from an AI model specified in the request body,
+    associating the conversation with the specified project_id.
 
-    - If `project_id` (query parameter) is provided and valid for the user,
-      the conversation (request messages + assistant response) will be stored
-      in that project's history.
+    - Requires `project_id` in the request body.
+    - Stores the conversation (user prompt + assistant response) in the project history.
     - Requires authentication.
-    - Supports streaming (`stream: true` in request body).
+    - Streams the response back using Server-Sent Events.
     """
-    project = None # Initialize project variable
-    # Check project ownership if project_id is provided
-    if project_id:
-        project_repo = ProjectRepository(db=db)
-        project = project_repo.get_by_id_for_owner(
-            project_id=project_id, owner_id=str(current_user.id)
-        )
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found or not owned by user"
-            )
+    print(f"Received generate request for project: {payload.project_id}") # Log request
 
-    # Prepare arguments for the orchestrator
-    # Assuming request.messages are already validated list of dicts by Pydantic
-    # Ensure orchestrator expects List[Dict[str, Any]] or adapt if it needs Pydantic models
+    # --- Optional: Verify Project Ownership ---
+    # This check is good practice before calling the orchestrator
+    project_repo = ProjectRepository(db=db)
+    project = project_repo.get_by_id_for_owner(
+        project_id=payload.project_id, owner_id=str(current_user.id)
+    )
+    if not project:
+        # How to return error in stream? Yield single error event.
+        async def error_stream_404():
+            error_data = {
+                "error": True,
+                "message": "Project not found or not owned by user",
+                "type": "NotFoundError"
+            }
+            yield f'data: {json.dumps(error_data)}\n\n'
+        print(f"Project access denied or not found for user {current_user.id}, project {payload.project_id}")
+        return StreamingResponse(error_stream_404(), media_type="text/event-stream", status_code=status.HTTP_404_NOT_FOUND)
+    # --- End Ownership Check ---
+
+    # Prepare the arguments dictionary for the orchestrator
     orchestrator_args = {
-        "messages": request.messages, # Pass the list of message dicts
-        "model": request.model,
-        "stream": request.stream,
-        "temperature": request.temperature,
-        "max_tokens": request.max_tokens,
-        # Pass other parameters if needed
+        "messages": payload.messages,
+        "model": payload.model,
+        "stream": True, # Force streaming for this endpoint
+        "temperature": payload.temperature,
+        "max_tokens": payload.max_tokens,
+        "system_prompt": payload.system_prompt,
+        "project_id": payload.project_id, # Pass project_id from payload
+        "db": db,                         # Pass db session
+        "user": current_user              # Pass authenticated user
+        # Add any other relevant kwargs from payload if needed
     }
 
     try:
-        # Call the core logic - result is either a dict or an async generator
-        result_or_stream = await orchestrator.process_generation_request(**orchestrator_args)
+        # Call the orchestrator - it now returns an AsyncGenerator yielding SSE strings
+        sse_event_generator: AsyncGenerator[str, None] = orchestrator.process_generation_request(
+            **orchestrator_args
+        )
 
-        if request.stream:
-            # --- Streaming Response Handling ---
-            is_async_generator = hasattr(result_or_stream, '__aiter__')
+        # Directly return the generator wrapped in StreamingResponse
+        return StreamingResponse(sse_event_generator, media_type="text/event-stream")
 
-            if not is_async_generator:
-                # Handle cases where stream=True but orchestrator didn't return a generator
-                print(f"Stream requested but received non-generator: {result_or_stream}")
-                error_payload = result_or_stream if isinstance(result_or_stream, dict) else {"error": True, "message":"Unknown stream error"}
-                async def error_stream():
-                    try:
-                        yield {"event": "error", "data": json.dumps(error_payload)}
-                    except TypeError as e:
-                         yield {"event": "error", "data": json.dumps({"error": True, "message": f"Non-serializable stream error occurred: {e}"})}
-                return EventSourceResponse(error_stream())
-
-            # Instantiate MessageRepository ONCE before wrapper
-            message_repo = MessageRepository(db=db)
-
-            async def stream_wrapper():
-                accumulated_content = ""
-                model_used = request.model # Start with requested model
-
-                try:
-                    async for chunk_dict in result_or_stream: # Assuming orchestrator yields dicts
-                        # --- ADDED: Log the exact chunk dict from orchestrator ---
-                        print(f"DEBUG BACKEND YIELDING CHUNK: {chunk_dict}")
-                        # --- END ADDED ---
-
-                        # Attempt to serialize chunk safely
-                        try:
-                            chunk_data = json.dumps(chunk_dict)
-                        except TypeError:
-                            error_chunk = {"error": True, "message": "Received non-serializable stream chunk"}
-                            yield {"event": "error", "data": json.dumps(error_chunk)}
-                            continue # Skip this chunk
-
-                        # Extract info for saving and yielding (ensure keys match logged chunk_dict)
-                        delta = chunk_dict.get("delta") # Modify this key if needed based on logs
-                        is_final = chunk_dict.get("is_final", False) # Modify if needed
-                        is_error = chunk_dict.get("error", False) # Modify if needed
-                        chunk_model = chunk_dict.get("model_name") # Modify if needed
-
-                        if chunk_model: model_used = chunk_model
-                        if delta: accumulated_content += delta
-
-                        # Yield chunk to client
-                        if is_error:
-                            yield {"event": "error", "data": chunk_data}
-                        elif is_final:
-                            yield {"event": "final", "data": chunk_data}
-                            # --- Stream finished: Save conversation if project_id exists ---
-                            if project_id and not is_error:
-                                try:
-                                    # Use request.messages directly (it's already a list of dicts)
-                                    messages_to_save = request.messages.copy()
-                                    messages_to_save.append({
-                                        "role": "assistant",
-                                        "content": accumulated_content
-                                    })
-                                    # Call repo method on the INSTANCE
-                                    message_repo.store_conversation(
-                                        project_id=project_id,
-                                        messages_data=messages_to_save,
-                                        default_model=model_used
-                                    )
-                                except Exception as db_error:
-                                    print(f"Error saving streamed conversation to database: {db_error}")
-                            # --- End save block ---
-                        elif delta is not None:
-                             yield {"event": "message", "data": chunk_data}
-
-                except Exception as e:
-                    print(f"Stream consumption error: {e}")
-                    error_payload = {"error": True, "message": f"Stream consumption error: {str(e)}"}
-                    yield {"event": "error", "data": json.dumps(error_payload)}
-
-            return EventSourceResponse(stream_wrapper())
-            # --- End Streaming Response Handling ---
-
-        else:
-            # --- Non-Streaming Response Handling ---
-            if isinstance(result_or_stream, dict) and result_or_stream.get("error"):
-                status_code = result_or_stream.get("status_code", 500)
-                raise HTTPException(status_code=status_code, detail=result_or_stream.get("message", "Orchestrator returned an error."))
-
-            # Save conversation if project_id exists
-            if project_id:
-                 try:
-                    # Instantiate MessageRepository
-                    message_repo = MessageRepository(db=db)
-                    # Use request.messages directly (it's already a list of dicts)
-                    messages_to_save = request.messages.copy()
-                    # Assuming result_or_stream is a dict with 'content' and maybe 'model_name'
-                    assistant_content = result_or_stream.get("content", "") if isinstance(result_or_stream, dict) else ""
-                    model_used = result_or_stream.get("model_name", request.model) if isinstance(result_or_stream, dict) else request.model
-                    messages_to_save.append({
-                        "role": "assistant",
-                        "content": assistant_content
-                    })
-                    message_repo.store_conversation(
-                        project_id=project_id,
-                        messages_data=messages_to_save,
-                        default_model=model_used
-                    )
-                 except Exception as db_error:
-                     print(f"Error saving non-streamed conversation to database: {db_error}")
-                     # Decide if non-saving should be an error or just a warning
-
-            # Return the direct result from the orchestrator
-            return result_or_stream
-            # --- End Non-Streaming Response Handling ---
-
-    except HTTPException as http_exc:
-        # Re-raise HTTPExceptions cleanly
-        raise http_exc
     except Exception as e:
-        # Catch-all for unexpected errors during orchestration/processing
-        print(f"Critical Error in /generate endpoint: {e}")
-        # Consider logging the full traceback here
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal Server Error processing request.")
+        # Catch unexpected errors *before* starting the stream (e.g., during setup)
+        print(f"Critical Error setting up stream in /generate endpoint for project {payload.project_id}: {e}")
+        # Log traceback here
+        import traceback
+        traceback.print_exc()
+        # Return an error stream if setup fails
+        async def error_stream_500():
+            error_data = {
+                "error": True,
+                "message": f"Internal Server Error setting up generation stream: {str(e)}",
+                "type": type(e).__name__
+            }
+            yield f'data: {json.dumps(error_data)}\n\n'
+        # Note: Cannot easily set 500 status code here with async generator error response
+        # The client will receive a 200 OK initially, then the error event.
+        return StreamingResponse(error_stream_500(), media_type="text/event-stream")

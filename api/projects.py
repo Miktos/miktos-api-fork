@@ -1,86 +1,93 @@
 # miktos_backend/api/projects.py
-from fastapi import APIRouter, Depends, HTTPException, Query, status # Added status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from typing import List, Optional # Added Optional
+from typing import List, Optional
 
-# Import Dependency Functions and User Model
-from config.database import get_db
-from api.auth import get_current_user # Import dependency to get the logged-in user
+# --- Import Dependency Functions and User Model ---
+# Assuming get_db is defined in 'dependencies.py'
+from dependencies import get_db
+# Import get_current_user from the auth module
+from api.auth import get_current_user # <--- CORRECT NAME
 from models.database_models import User # Import the User model for type hinting
 
 # --- Import Schemas ---
-from schemas.user import ProjectCreate, ProjectRead, ProjectUpdate
+import schemas
 
-# --- Import Repository CLASS ---
-from repositories.project_repository import ProjectRepository # Import the class
+# --- Import Repository CLASSES ---
+from repositories.project_repository import ProjectRepository
+from repositories.message_repository import MessageRepository
 
 # --- Define Router ---
-# Define the prefix here for all project routes
 router = APIRouter(
-    prefix="/api/v1/projects", # Define prefix here
-    tags=["Projects"]
+    tags=["Projects"] # Tag for grouping in API docs
 )
 
-# Get all projects for the current logged-in user
-@router.get("/", response_model=List[ProjectRead]) # Path relative to prefix
+# === Existing Project CRUD Endpoints ===
+
+@router.get(
+    "/",
+    response_model=List[schemas.ProjectRead],
+    summary="Get User's Projects"
+)
 async def get_user_projects(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user), # Correct name
     db: Session = Depends(get_db)
 ):
     """Retrieve projects for the current authenticated user."""
-    # Instantiate the repository
     project_repo = ProjectRepository(db=db)
-    # Call the correct method from the instance
     projects = project_repo.get_multi_by_owner(owner_id=str(current_user.id), skip=skip, limit=limit)
     return projects
 
-# Create a new project for the current logged-in user
-@router.post("/", response_model=ProjectRead, status_code=status.HTTP_201_CREATED) # Path relative to prefix
+@router.post(
+    "/",
+    response_model=schemas.ProjectRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create New Project"
+)
 async def create_new_project(
-    project: ProjectCreate, # Request body with project details
-    current_user: User = Depends(get_current_user),
+    project: schemas.ProjectCreate,
+    current_user: User = Depends(get_current_user), # Correct name
     db: Session = Depends(get_db)
 ):
     """Create a new project owned by the current authenticated user."""
-    # Instantiate the repository
     project_repo = ProjectRepository(db=db)
-    # Call the method that handles creation and owner assignment
-    # Ensure current_user.id is converted to string if your DB expects strings for IDs
     created_project = project_repo.create_with_owner(
         obj_in=project, owner_id=str(current_user.id)
     )
     return created_project
 
-# Get a specific project by ID, ensuring it belongs to the current user
-@router.get("/{project_id}", response_model=ProjectRead) # Path relative to prefix
+@router.get(
+    "/{project_id}",
+    response_model=schemas.ProjectRead,
+    summary="Get Specific Project"
+)
 async def get_project(
-    project_id: str, # Path parameter
-    current_user: User = Depends(get_current_user),
+    project_id: str,
+    current_user: User = Depends(get_current_user), # Correct name
     db: Session = Depends(get_db)
 ):
     """Retrieve a specific project by ID, verifying ownership."""
-    # Instantiate the repository
     project_repo = ProjectRepository(db=db)
-    # Call the method that verifies ownership
     project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=str(current_user.id))
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found or not owned by user")
     return project
 
-# Update a project, ensuring it belongs to the current user
-@router.patch("/{project_id}", response_model=ProjectRead) # Path relative to prefix
+@router.patch(
+    "/{project_id}",
+    response_model=schemas.ProjectRead,
+    summary="Update Project"
+)
 async def update_project(
-    project_id: str, # Path parameter
-    project_update: ProjectUpdate, # Request body with updates
-    current_user: User = Depends(get_current_user),
+    project_id: str,
+    project_update: schemas.ProjectUpdate,
+    current_user: User = Depends(get_current_user), # Correct name
     db: Session = Depends(get_db)
 ):
     """Update a specific project, verifying ownership."""
-    # Instantiate the repository
     project_repo = ProjectRepository(db=db)
-    # Call the method that verifies ownership before updating
     updated_project = project_repo.update_with_owner_check(
         project_id=project_id, owner_id=str(current_user.id), obj_in=project_update
     )
@@ -88,19 +95,53 @@ async def update_project(
          raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found or not owned by user")
     return updated_project
 
-# Delete a project, ensuring it belongs to the current user
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT) # Path relative to prefix
+@router.delete(
+    "/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete Project"
+)
 async def delete_project(
-    project_id: str, # Path parameter
-    current_user: User = Depends(get_current_user),
+    project_id: str,
+    current_user: User = Depends(get_current_user), # Correct name
     db: Session = Depends(get_db)
 ):
     """Delete a specific project, verifying ownership."""
-    # Instantiate the repository
     project_repo = ProjectRepository(db=db)
-    # Call the method that verifies ownership before deleting
     deleted_project = project_repo.remove_with_owner_check(project_id=project_id, owner_id=str(current_user.id))
     if deleted_project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found or not owned by user")
-    # No response body needed for 204
     return None
+
+# === NEW Endpoint for Project Messages ===
+
+@router.get(
+    "/{project_id}/messages",
+    response_model=List[schemas.MessageRead],
+    summary="Get Project Chat History",
+    tags=["Projects", "Messages"]
+)
+def read_project_messages(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user) # Correct name
+):
+    """
+    Retrieves the chat message history for a specific project owned by the current user.
+    Messages are returned ordered by timestamp (oldest first).
+    """
+    msg_repo = MessageRepository(db=db)
+    try:
+        messages = msg_repo.get_multi_by_project(
+            project_id=project_id,
+            user_id=str(current_user.id),
+            ascending=True
+        )
+        return messages
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"Error fetching messages for project {project_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while fetching project messages."
+        )
