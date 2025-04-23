@@ -1,73 +1,78 @@
 # miktos_backend/core/orchestrator.py
 
 import asyncio
-import json # Import json for formatting SSE data
+import json
 from typing import List, Dict, Any, Optional, Union, AsyncGenerator
 
 # --- Database and Schema Imports ---
 from sqlalchemy.orm import Session
-import schemas # Import your schemas module
-from repositories import message_repository # Import the message repo
-from models import database_models as models # Import User model
+from fastapi import HTTPException # Import for error handling
+import schemas
+from repositories import message_repository, project_repository # Import both repos
+from models import database_models as models
 
 # --- Integration Client Imports ---
 from integrations import openai_client, claude_client, gemini_client
 
-# --- Model Provider Mapping (Keep as is) ---
+# --- Model Provider Mapping (Unchanged) ---
 def get_provider_from_model(model_id: str) -> Optional[str]:
     """Determines the likely provider based on the model ID prefix."""
     model_id_lower = model_id.lower()
-    if model_id_lower.startswith("gpt-"):
-        return "openai"
-    elif model_id_lower.startswith("claude-"):
-        return "anthropic"
-    elif model_id_lower.startswith("gemini-"):
-        return "google"
+    if model_id_lower.startswith("gpt-"): return "openai"
+    elif model_id_lower.startswith("claude-"): return "anthropic"
+    elif model_id_lower.startswith("gemini-"): return "google"
     elif "/" in model_id_lower:
         provider = model_id_lower.split('/')[0]
-        if provider in ["openai", "google", "anthropic"]: # Add more if clients exist
-             return provider
+        if provider in ["openai", "google", "anthropic"]: return provider
     return None
 
-# --- Main Orchestration Function - MODIFIED ---
+# --- Main Orchestration Function - UPDATED ---
 async def process_generation_request(
     *, # Force keyword arguments
     messages: List[Dict[str, Any]],
     model: str,
-    stream: bool = False, # Default to False, but frontend likely sends True
+    stream: bool = True, # Default stream to True as endpoint expects it
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    system_prompt: Optional[str] = None,
-    project_id: str, # Added project_id
-    db: Session, # Added db session
-    user: models.User, # Added authenticated user
+    # system_prompt: Optional[str] = None, # Removed - will be derived from notes or handled via messages
+    project_id: str,
+    db: Session,
+    user: models.User,
     **provider_specific_kwargs
-) -> AsyncGenerator[str, None]: # Return type changed to SSE string generator
+) -> AsyncGenerator[str, None]:
     """
-    Orchestrates the request to the appropriate AI model provider client,
-    saves user and assistant messages, and yields SSE formatted strings.
-
-    Args:
-        messages: List of message dictionaries (including the latest user prompt).
-        model: The target model ID.
-        stream: Whether to stream the response (should be True for this endpoint).
-        temperature: Sampling temperature.
-        max_tokens: Max tokens for the completion.
-        system_prompt: System prompt/instruction.
-        project_id: The ID of the project this conversation belongs to.
-        db: SQLAlchemy Session dependency.
-        user: The authenticated User object.
-        **provider_specific_kwargs: Additional provider arguments.
-
-    Yields:
-        Server-Sent Event (SSE) formatted strings (e.g., "data: {...}\\n\\n").
+    Orchestrates the request to the AI provider, injecting project context notes,
+    saves user/assistant messages, and yields SSE formatted strings.
     """
-    print(f"Orchestrator received request for project {project_id}, model: {model}, stream: {stream}")
+    print(f"Orchestrator request for project {project_id}, model: {model}")
 
-    # --- Instantiate Message Repository ---
+    # --- Instantiate Repositories ---
     msg_repo = message_repository.MessageRepository(db=db)
+    project_repo = project_repository.ProjectRepository(db=db) # Instantiate Project Repo
 
-    # --- 1. Save User Message ---
+    # --- 1. Fetch Project & Notes ---
+    project_notes = ""
+    try:
+        # Fetch project using the repo (includes owner check)
+        project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=user.id)
+        if not project:
+             # Should be caught by endpoint, but defensive check
+             error_msg = "Project not found or access denied."
+             print(f"Error for project {project_id}: {error_msg}")
+             yield f'data: {json.dumps({"error": True, "message": error_msg, "type": "NotFoundError"})}\n\n'
+             return
+
+        if project.context_notes:
+            project_notes = project.context_notes.strip()
+            if project_notes: # Log only if notes actually exist
+                print(f"Found {len(project_notes)} chars of context notes for project {project_id}")
+
+    except Exception as e:
+        print(f"Warning: Could not fetch project details/notes for project {project_id}: {e}")
+        yield f'data: {json.dumps({"warning": True, "message": "Could not load project context notes."})}\n\n'
+        # Continue without notes
+
+    # --- 2. Save User Message ---
     if not messages or messages[-1].get("role") != "user":
         error_msg = "Internal error: Could not identify user message to save."
         print(f"Error for project {project_id}: {error_msg}")
@@ -77,24 +82,50 @@ async def process_generation_request(
     user_message_content = messages[-1].get("content")
     try:
         user_message_schema = schemas.MessageCreate(
-            project_id=project_id,
-            user_id=user.id,
-            role=schemas.MessageRole.USER,
-            content=user_message_content
+            project_id=project_id, user_id=user.id, role=schemas.MessageRole.USER, content=user_message_content
         )
         msg_repo.create(obj_in=user_message_schema)
         print(f"Saved user message for project {project_id}")
     except Exception as e:
-        # Log error, maybe yield non-fatal error to frontend?
         print(f"Error saving user message for project {project_id}: {e}")
         yield f'data: {json.dumps({"warning": True, "message": "Failed to save user message to history."})}\n\n'
 
 
-    # --- Routing Logic (Keep as is) ---
-    provider = get_provider_from_model(model)
-    actual_model_id = model.split('/')[-1] if '/' in model else model
+    # --- 3. Prepare Messages & System Prompt for AI (Inject Notes) ---
+    messages_for_api = messages.copy() # Create a copy to modify
+    final_system_prompt = None # For providers supporting explicit system prompt
 
-    if not provider:
+    provider = get_provider_from_model(model) # Get provider for injection logic
+
+    if project_notes:
+         # Inject notes based on provider strategy
+         if provider in ["anthropic", "google"]:
+              final_system_prompt = project_notes # Use dedicated system prompt parameter
+              print(f"Injecting project notes ({len(project_notes)} chars) as system prompt for {provider}.")
+         elif provider == "openai":
+               # Prepend notes as a system message if none exists, otherwise append
+               system_msg_index = -1
+               for i, msg in enumerate(messages_for_api):
+                    if msg.get("role") == "system":
+                         system_msg_index = i
+                         break
+               if system_msg_index != -1:
+                    # Append to existing system message
+                    messages_for_api[system_msg_index]["content"] = f"{messages_for_api[system_msg_index]['content']}\n\n[Project Context Notes]\n{project_notes}"
+                    print(f"Appending project notes ({len(project_notes)} chars) to existing system message for OpenAI.")
+               else:
+                    # Prepend as new system message
+                    messages_for_api.insert(0, {"role": "system", "content": project_notes})
+                    print(f"Prepending project notes ({len(project_notes)} chars) as system message for OpenAI.")
+         else: # Fallback for unknown providers
+              # Prepend notes as a user message clearly marked
+              messages_for_api.insert(0, {"role": "user", "content": f"[START CONTEXT NOTES]\n{project_notes}\n[END CONTEXT NOTES]\n\nPlease use the above notes as context for my next message."})
+              print(f"Prepending project notes ({len(project_notes)} chars) as faux user message.")
+
+
+    # --- 4. Routing Logic (Use potentially modified messages_for_api) ---
+    actual_model_id = model.split('/')[-1] if '/' in model else model
+    if not provider: # Double check provider after potential note injection logic
         error_msg = f"Could not determine provider for model: {model}"
         print(f"Error for project {project_id}: {error_msg}")
         yield f'data: {json.dumps({"error": True, "message": error_msg, "type": "RoutingError"})}\n\n'
@@ -102,89 +133,54 @@ async def process_generation_request(
 
     client_func = None
     client_args = {
-        "messages": messages,
+        "messages": messages_for_api, # Use the (potentially modified) list
         "model": actual_model_id,
-        "stream": True, # Force stream=True for this orchestrator version
+        "stream": True,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        # Pass system prompt explicitly only if it was set *and* provider uses it
+        "system_prompt": final_system_prompt if provider in ["anthropic", "google"] else None,
         **provider_specific_kwargs
     }
+    # Remove None values as some clients might not handle them gracefully
+    client_args = {k: v for k, v in client_args.items() if v is not None}
 
-    if provider == "openai":
-        print(f"Routing to OpenAI client with model: {actual_model_id}...")
-        client_func = openai_client.generate_completion
-    elif provider == "anthropic":
-        print(f"Routing to Anthropic client with model: {actual_model_id}...")
-        client_func = claude_client.generate_completion
-        client_args["system_prompt"] = system_prompt
-    elif provider == "google":
-        print(f"Routing to Google client with model: {actual_model_id}...")
-        client_func = gemini_client.generate_completion
-        client_args["system_prompt"] = system_prompt
+
+    if provider == "openai": client_func = openai_client.generate_completion
+    elif provider == "anthropic": client_func = claude_client.generate_completion
+    elif provider == "google": client_func = gemini_client.generate_completion
     else:
         error_msg = f"No integration client implemented for provider: {provider} (model: {model})"
         print(f"Error for project {project_id}: {error_msg}")
         yield f'data: {json.dumps({"error": True, "message": error_msg, "type": "RoutingError"})}\n\n'
         return
 
-    # --- Execute Client Call & Handle Streaming ---
-    final_assistant_content = ""
-    final_model_name_used = actual_model_id # Default to requested model
-    error_occurred = False
-
+    # --- 5. Execute Client Call & Handle Streaming (Unchanged from previous correct version) ---
+    final_assistant_content = ""; final_model_name_used = actual_model_id; error_occurred = False
     try:
-        # Await the client call to get the async generator
         stream_generator = await client_func(**client_args)
-
-        # Iterate through the stream generator from the client
         async for chunk_dict in stream_generator:
-            # Assuming client yields dictionaries like {"delta": "...", "model_name": "...", "error": ...}
             if isinstance(chunk_dict, dict):
-                 # Format the dictionary chunk into an SSE string
                  sse_event_string = f'data: {json.dumps(chunk_dict)}\n\n'
                  yield sse_event_string
-
-                 # Accumulate content and check for errors/model name
-                 if chunk_dict.get("delta"):
-                     final_assistant_content += chunk_dict["delta"]
-                 if chunk_dict.get("model_name"):
-                     final_model_name_used = chunk_dict["model_name"]
-                 if chunk_dict.get("error"):
-                      error_occurred = True
-                      print(f"Error received from client stream for project {project_id}: {chunk_dict.get('message')}")
-                      # Potentially break or just let stream finish yielding error
-            else:
-                 # Handle unexpected chunk type from client generator
-                 print(f"Warning: Orchestrator received unexpected chunk type: {type(chunk_dict)}")
-
-
+                 if chunk_dict.get("delta"): final_assistant_content += chunk_dict["delta"]
+                 if chunk_dict.get("model_name"): final_model_name_used = chunk_dict["model_name"]
+                 if chunk_dict.get("error"): error_occurred = True; print(f"Stream Error from Client: {chunk_dict.get('message')}")
+            else: print(f"Warning: Orchestrator received non-dict chunk: {type(chunk_dict)}")
     except Exception as e:
-        error_occurred = True
-        print(f"Unexpected Error during stream processing for {provider} on project {project_id}: {e}")
-        import traceback
-        traceback.print_exc() # Print full traceback for debugging server-side
-        error_msg = f"An unexpected error occurred processing the stream from {provider}: {str(e)}"
-        yield f'data: {json.dumps({"error": True, "message": error_msg, "type": type(e).__name__})}\n\n'
+        error_occurred = True; print(f"Unexpected Error processing stream for {provider}: {e}"); import traceback; traceback.print_exc()
+        error_msg = f"Stream processing error: {str(e)}"; yield f'data: {json.dumps({"error": True, "message": error_msg, "type": type(e).__name__})}\n\n'
 
 
-    # --- 3. Save Assistant Message (After Stream Finishes) ---
-    # Only save if no error occurred during the stream and we got content
+    # --- 6. Save Assistant Message (Unchanged from previous correct version) ---
     if not error_occurred and final_assistant_content:
         try:
             assistant_message_schema = schemas.MessageCreate(
-                project_id=project_id,
-                user_id=user.id, # Associate with the user's session
-                role=schemas.MessageRole.ASSISTANT,
-                content=final_assistant_content.strip(),
-                model=final_model_name_used # Store the actual model used
-                # Add metadata if available
+                project_id=project_id, user_id=user.id, role=schemas.MessageRole.ASSISTANT,
+                content=final_assistant_content.strip(), model=final_model_name_used
             )
             msg_repo.create(obj_in=assistant_message_schema)
             print(f"Saved assistant message for project {project_id}")
-        except Exception as e:
-            # Log error saving assistant message, but can't yield to client now
-            print(f"Error saving assistant message for project {project_id}: {e}")
-    elif error_occurred:
-         print(f"Skipping assistant message save for project {project_id} due to stream error.")
-    else: # No error, but no content
-         print(f"Assistant response was empty for project {project_id}, not saving.")
+        except Exception as e: print(f"Error saving assistant message for project {project_id}: {e}")
+    elif error_occurred: print(f"Skipping assistant message save for project {project_id} due to stream error.")
+    else: print(f"Assistant response empty for project {project_id}, not saving.")

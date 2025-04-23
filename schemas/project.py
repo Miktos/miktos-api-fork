@@ -1,5 +1,5 @@
 # schemas/project.py
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl # <-- Import HttpUrl for validation
 from datetime import datetime
 from typing import Optional
 
@@ -10,6 +10,7 @@ class ProjectBase(BaseModel):
     name: str
     description: Optional[str] = None
     context_notes: Optional[str] = None
+    repository_url: Optional[HttpUrl] = None # <-- ADDED: Optional Git repo URL
 
 # Properties to receive via API on creation
 class ProjectCreate(ProjectBase):
@@ -22,6 +23,8 @@ class ProjectRead(ProjectBase):
     owner_id: str # Include the owner's ID
     created_at: datetime
     updated_at: Optional[datetime] = None # Can be null if never updated
+    # Add context_status if you want to show it in the API response
+    # context_status: Optional[str] = None 
 
     class Config:
         from_attributes = True # Pydantic v2 style
@@ -32,3 +35,4 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     context_notes: Optional[str] = None
+    repository_url: Optional[HttpUrl] = None # <-- ADDED: Allow updating/adding repo URL

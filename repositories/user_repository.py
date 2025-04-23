@@ -91,13 +91,25 @@ class UserRepository(BaseRepository[User, UserCreate, UserUpdate]): # <-- Add Us
 
     # --- User Authentication Methods ---
 
-    def authenticate(self, email: str, password: str) -> Optional[User]:
-        """Authenticate a user by email and password."""
-        user = self.get_by_email(email)
+    def authenticate(self, identifier: str, password: str) -> Optional[User]:
+        """
+        Authenticate a user by identifier (checking email first, then username) and password.
+        """
+        # Try finding user by email first
+        user = self.get_by_email(identifier)
+
+        # If not found by email, try finding by username (if username exists on model)
+        if not user and hasattr(self.model, 'username'):
+             user = self.get_by_username(identifier)
+
+        # If user not found by either method
         if not user:
             return None # User not found
+
+        # If user found, verify password
         if not self.verify_password(password, user.hashed_password):
             return None # Incorrect password
+
         return user # Authentication successful
 
     # --- Password Hashing Utilities ---
@@ -107,11 +119,9 @@ class UserRepository(BaseRepository[User, UserCreate, UserUpdate]): # <-- Add Us
     @staticmethod
     def _hash_password(password: str) -> str:
         """Hash a password for storing using bcrypt."""
-        # Ensure password is bytes, generate salt, hash, then decode back to string for DB
         return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verify a stored password against a provided password using bcrypt."""
-        # Ensure both are bytes for bcrypt comparison
         return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))

@@ -2,26 +2,38 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+import uvicorn # <-- Import uvicorn for the run block
 
 # Import modules containing routers
 from api import endpoints, auth, projects
 
 # Import database configuration and base model
-from config.database import get_db, engine, Base
+# Assuming get_db is defined in config.database or dependencies
+# Adjust import if get_db comes from dependencies.py
+from config.database import engine, Base, SessionLocal #<-- Import SessionLocal if needed by background tasks
 
 # Create database tables if they don't exist (for development)
-# In production, you should use migrations (e.g., Alembic)
-try:
-    Base.metadata.create_all(bind=engine)
-    print("Database tables checked/created.")
-except Exception as e:
-    print(f"Error creating database tables: {e}")
+def create_db_and_tables():
+    # In production, you should use migrations (e.g., Alembic)
+    print("Checking/Creating database tables...")
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("Database tables checked/created.")
+    except Exception as e:
+        print(f"Error creating database tables: {e}")
+
+# Call table creation function (consider using lifespan events for more robustness)
+create_db_and_tables()
 
 # Initialize the FastAPI app
 app = FastAPI(
     title="Miktós AI Orchestrator",
     description="A platform to interact with multiple AI models via a unified interface.",
-    version="0.2.0"
+    version="0.2.0",
+    # --- Add OpenAPI URL for documentation ---
+    openapi_url="/api/v1/openapi.json", # Standard practice to version the OpenAPI spec
+    docs_url="/api/v1/docs",            # Serve Swagger UI under versioned path
+    redoc_url="/api/v1/redoc"           # Serve ReDoc under versioned path
 )
 
 # --- CORS Middleware ---
@@ -32,6 +44,7 @@ origins = [
     "http://localhost:8080", # Common alternative dev port
     "http://localhost",
     # Add your deployed frontend URL here when ready
+    # e.g., "https://your-frontend-domain.com"
 ]
 
 app.add_middleware(
@@ -43,40 +56,58 @@ app.add_middleware(
 )
 
 # --- Include API routers ---
+# Apply a consistent base prefix for all API V1 routes
 
-# General Endpoints Router (e.g., /health, /generate)
-# Prefix is applied here because router in endpoints.py might not have it.
+# General Endpoints Router (e.g., /generate)
 app.include_router(
     endpoints.router,
     prefix="/api/v1", # Base prefix for general endpoints
-    tags=["General"]   # Tag for docs grouping
+    tags=["General"]
 )
 
 # Authentication Router
-# Assuming prefix "/api/v1/auth" is defined within api/auth.py router itself
-app.include_router(auth.router)
+app.include_router(
+    auth.router,
+    prefix="/api/v1/auth", # Apply consistent prefix here
+    tags=["Authentication"] # Add tag for docs grouping if not defined in auth.py
+)
 
 # Projects Router
-# --- CORRECTION: Add prefix here as it's not defined in api/projects.py ---
 app.include_router(
     projects.router,
-    prefix="/api/v1/projects", # Apply the correct prefix
-    # Tags are already defined in api/projects.py, but specifying here doesn't hurt
-    # and can override if needed. Let's keep it consistent with how tags are defined there.
-    # tags=["Projects"] # Redundant if already tagged in projects.py
+    prefix="/api/v1/projects", # Prefix already defined correctly
+    # tags=["Projects"] # Tags likely defined in projects.py already
 )
 
 
 # --- Root Endpoint ---
+# This is outside the /api/v1 prefix
 @app.get("/", tags=["Root"])
 async def root():
     """Provides a simple welcome message for the API root."""
-    return {"message": "Welcome to Miktós AI Orchestration Platform API"}
+    return {"message": "Welcome to Miktós AI Orchestration Platform API. Docs at /api/v1/docs"}
 
 # --- (Optional) Health Check Endpoint ---
-# Often useful, can be added to endpoints.py or here
+# Also outside /api/v1 prefix, or move into endpoints.router
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Simple health check endpoint."""
-    # Could add DB connection check here if needed
+    # Could add DB connection check here
+    # try:
+    #     db = SessionLocal()
+    #     db.execute(text("SELECT 1"))
+    #     db.close()
+    #     db_status = "ok"
+    # except Exception as e:
+    #     db_status = "error"
+    #     print(f"Health check DB error: {e}")
+    # return {"status": "ok", "database": db_status}
     return {"status": "ok"}
+
+
+# --- Run with Uvicorn (if running python main.py directly) ---
+if __name__ == "__main__":
+    print("Starting Uvicorn server directly from main.py...")
+    # Use host="127.0.0.1" for local access only, or "0.0.0.0" to be accessible on your network
+    # Port 8000 is the default for FastAPI examples
+    uvicorn.run(app, host="127.0.0.1", port=8000)

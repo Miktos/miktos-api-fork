@@ -2,41 +2,28 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from typing import Annotated, Optional # Use Annotated for newer Python versions if needed
+from typing import Annotated, Optional
 
-# Import the specific CLASS and base repository if needed for type hints elsewhere
+# Import repository/models/schemas etc.
 from repositories.user_repository import UserRepository
-from models.database_models import User # Import your User model if needed for type hints
-
+from models.database_models import User
 from schemas.user import UserCreate, UserRead
-from schemas.token import Token, TokenData # Import your token schemas
+from schemas.token import Token, TokenData
 
-from datetime import datetime, timedelta # Keep datetime imports
-from jose import JWTError, jwt # Keep jose imports
-from config.settings import settings # Keep settings import
-from config.database import get_db # Keep get_db import
+# Import utils/config
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
+from config.settings import settings
+from config.database import get_db
+import security # Assuming security.py is at the root or correctly importable
 
 router = APIRouter(
-    prefix="/api/v1/auth", # Keep the prefix
-    tags=["Authentication"]
+    tags=["Authentication"] # Prefix is applied in main.py
 )
 
-# OAuth2 scheme - Use the correct tokenUrl relative to the API root
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token") # Path relative to API root
 
-# --- Helper Functions (Keep as they are) ---
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(days=settings.TOKEN_EXPIRY_DAYS)
-    to_encode.update({"exp": expire})
-    # Ensure settings.JWT_SECRET is loaded correctly
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm="HS256")
-    return encoded_jwt
-
-# --- Dependency to get current user (Revised) ---
+# --- Dependency to get current user ---
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -44,69 +31,86 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
-        # Use the correct subject claim key ('sub') used during token creation
-        user_identifier: str = payload.get("sub")
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[security.ALGORITHM])
+        user_identifier: str = payload.get("sub") # Expecting user ID (as string) in 'sub'
         if user_identifier is None:
+            print("[AUTH DEBUG] JWT decode error: 'sub' claim missing") # Debug
             raise credentials_exception
-        # Assuming 'sub' contains the user ID directly based on your login logic
-        # If 'sub' contains email, you'd need TokenData(email=user_identifier) and get by email
-        token_data = TokenData(user_id=user_identifier) # Make sure TokenData schema expects user_id
-    except JWTError:
-        raise credentials_exception
 
-    # --- FIX: Instantiate Repository and use its method ---
-    user_repo = UserRepository(db)
-    user = user_repo.get_by_id(user_id=token_data.user_id) # Use get_by_id method
-    # --- END FIX ---
+        user_id = user_identifier # Use the ID directly
+        print(f"[AUTH DEBUG] Extracted user_id from token: {user_id}") # Debug
+
+        user_repo = UserRepository(db)
+
+        # --- FIX: Call the specific get_by_id method from UserRepository ---
+        print(f"[AUTH DEBUG] Calling user_repo.get_by_id with user_id={user_id}") # Debug
+        user = user_repo.get_by_id(user_id=user_id) # Use the specific method
+        print(f"[AUTH DEBUG] Result of get_by_id: {'User found' if user else 'User not found'}") # Debug
+        # --- END FIX ---
+
+    except JWTError as e:
+        print(f"[AUTH DEBUG] JWT decode error: {e}") # Debug
+        raise credentials_exception
+    except Exception as e:
+        # Log unexpected errors during user lookup
+        print(f"[AUTH ERROR] Error fetching user during token validation: {e}") # Debug
+        # Optionally log the full traceback here
+        # import traceback
+        # traceback.print_exc()
+        raise credentials_exception # Re-raise as unauthorized for security
 
     if user is None:
+        print(f"[AUTH DEBUG] User not found in DB for id: {user_id}") # Debug
         raise credentials_exception
-    # Check if user is active (if you have an is_active field)
-    # if not user.is_active:
-    #     raise HTTPException(status_code=400, detail="Inactive user")
-    return user # Return the user object fetched from DB
 
-# --- Login endpoint (Revised) ---
-@router.post("/token", response_model=Token) # Endpoint path relative to prefix
+    # Check for active status if applicable
+    if hasattr(user, 'is_active') and not user.is_active:
+         print(f"[AUTH DEBUG] Authentication failed: User {user_id} is inactive.") # Debug
+         raise HTTPException(status_code=400, detail="Inactive user")
+
+    print(f"[AUTH DEBUG] get_current_user returning user: {user.id}") # Debug
+    return user
+
+# --- Login endpoint (Should be correct now) ---
+@router.post("/token", response_model=Token)
 async def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(), # Use OAuth2PasswordRequestForm directly
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Session = Depends(get_db)
 ):
-    # --- FIX: Instantiate Repository and use its authenticate method ---
+    # ... (Keep the previous corrected version of this function) ...
+    print(f"Attempting login for identifier: {form_data.username}")
     user_repo = UserRepository(db)
-    # Use the authenticate method which handles getting user and verifying password
-    user = user_repo.authenticate(email=form_data.username, password=form_data.password)
-    # --- END FIX ---
-
+    user = user_repo.authenticate(identifier=form_data.username, password=form_data.password)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Create access token with user ID as the subject
-    # Ensure user object has an 'id' attribute
-    access_token = create_access_token(data={"sub": str(user.id)}) # Convert ID to string if needed
+        print(f"Authentication failed for: {form_data.username}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password", headers={"WWW-Authenticate": "Bearer"})
+    print(f"Authentication successful for user: {user.id}")
+    access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=access_token_expires)
+    print(f"Generated token for user: {user.id}")
     return {"access_token": access_token, "token_type": "bearer"}
 
-# --- Register new user (Revised) ---
-@router.post("/register", response_model=UserRead) # Endpoint path relative to prefix
-async def register_user(user: UserCreate, db: Session = Depends(get_db)):
-    # --- FIX: Instantiate Repository and use its methods ---
+# --- Register new user (Should be correct now) ---
+@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+async def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    # ... (Keep the previous corrected version of this function) ...
+    print(f"Attempting registration for email: {user_in.email}")
     user_repo = UserRepository(db)
-    db_user = user_repo.get_by_email(email=user.email) # Use instance method
-    if db_user:
+    db_user_email = user_repo.get_by_email(email=user_in.email)
+    if db_user_email:
+        print(f"Registration failed: Email {user_in.email} already exists.")
         raise HTTPException(status_code=400, detail="Email already registered")
+    if hasattr(user_in, 'username') and user_in.username:
+        db_user_username = user_repo.get_by_username(username=user_in.username)
+        if db_user_username:
+            print(f"Registration failed: Username {user_in.username} already exists.")
+            raise HTTPException(status_code=400, detail="Username already registered")
+    created_user = user_repo.create(obj_in=user_in)
+    print(f"Successfully registered user: {created_user.id}")
+    return created_user
 
-    # Use the create method from the instance
-    created_user = user_repo.create(obj_in=user)
-    # --- END FIX ---
-    return created_user # Return the newly created user object
-
-# --- Get current user info (Revised - uses revised dependency) ---
-@router.get("/me", response_model=UserRead) # Endpoint path relative to prefix
-async def read_users_me(current_user: User = Depends(get_current_user)): # Type hint with your User model
-    # The get_current_user dependency already fetches and returns the user object
+# --- Get current user info (Should be correct now) ---
+@router.get("/users/me", response_model=UserRead)
+async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
+    print(f"Endpoint read_users_me called for user: {current_user.id}")
     return current_user
