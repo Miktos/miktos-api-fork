@@ -1,6 +1,7 @@
 # schemas/message.py
 import enum
-from pydantic import BaseModel, Field # Import Field for default_factory
+# Make sure ConfigDict is imported
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 from typing import Optional, Dict, Any
 import uuid # Import uuid for default ID
@@ -22,6 +23,9 @@ class MessageCreate(BaseModel):
 
 # Schema for reading a message (output for API)
 class MessageRead(BaseModel):
+    # Use model_config = ConfigDict(...) instead of class Config
+    model_config = ConfigDict(from_attributes=True) # Pydantic v2 style (replaces orm_mode)
+
     id: str
     project_id: str
     user_id: str
@@ -30,9 +34,6 @@ class MessageRead(BaseModel):
     model: Optional[str] = None
     message_metadata: Optional[Dict[str, Any]] = None
     created_at: datetime
-
-    class Config:
-        from_attributes = True # Pydantic v2 style (replaces orm_mode)
 
 # Optional: If your BaseRepository needs an Update schema
 class MessageUpdate(BaseModel):

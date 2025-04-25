@@ -60,3 +60,4 @@ youtube-transcript-api==1.0.2
 GitPython-3.1.44 gitdb-4.0.12 smmap-5.0.2
 passlib[bcrypt]
 python-jose[cryptography]
+echo "pytest-asyncio" >> requirements-dev.txt

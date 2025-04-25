@@ -1,6 +1,7 @@
 # miktos_backend/api/models.py
 
-from pydantic import BaseModel, Field
+# Make sure ConfigDict is imported
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional
 
 class GenerateRequest(BaseModel):
@@ -19,13 +20,9 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     """Response model for a successful non-streaming generation."""
     # This is likely not used directly if the endpoint always streams or returns dicts from orchestrator
-    error: bool = False
-    content: Optional[str] = None
-    finish_reason: Optional[str] = None
-    usage: Optional[Dict[str, int]] = None
-    model_name: Optional[str] = None
 
-    class Config:
+    # Use model_config = ConfigDict(...) instead of class Config
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "error": False,
@@ -35,3 +32,10 @@ class GenerateResponse(BaseModel):
                 "model_name": "gpt-4o"
             }
         }
+    )
+
+    error: bool = False
+    content: Optional[str] = None
+    finish_reason: Optional[str] = None
+    usage: Optional[Dict[str, int]] = None
+    model_name: Optional[str] = None

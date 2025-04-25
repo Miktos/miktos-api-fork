@@ -1,6 +1,7 @@
 # miktos_backend/schemas/user.py
 
-from pydantic import BaseModel, EmailStr, Field
+# Make sure ConfigDict is imported
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -27,15 +28,16 @@ class UserUpdate(BaseModel):
 
 # Properties to return to the client (never include password)
 class UserRead(UserBase):
+    # Use model_config = ConfigDict(...) instead of class Config
+    model_config = ConfigDict(from_attributes=True) # Enable ORM mode (SQLAlchemy model -> Pydantic schema)
+
     id: str # Assuming UUIDs stored as strings, change if integer
     # is_active is inherited from UserBase
     created_at: datetime
 
-    class Config:
-        from_attributes = True # Enable ORM mode (SQLAlchemy model -> Pydantic schema)
 
 # ==============================================================================
-# Project Schemas
+# Project Schemas (WARNING: These should ideally be in schemas/project.py)
 # ==============================================================================
 
 class ProjectBase(BaseModel):
@@ -48,13 +50,13 @@ class ProjectCreate(ProjectBase):
     pass
 
 class ProjectRead(ProjectBase):
+    # Use model_config = ConfigDict(...) instead of class Config
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     owner_id: str # ID of the user who owns the project
     created_at: datetime
     updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
 
 class ProjectUpdate(BaseModel):
     # All fields are optional for updates
@@ -63,7 +65,7 @@ class ProjectUpdate(BaseModel):
     context_notes: Optional[str] = None
 
 # ==============================================================================
-# Message Schemas
+# Message Schemas (WARNING: These should ideally be in schemas/message.py)
 # ==============================================================================
 
 class MessageBase(BaseModel):
@@ -84,10 +86,10 @@ class MessageUpdate(BaseModel):
 # --- END ADDITION ---
 
 class MessageRead(MessageBase):
+    # Use model_config = ConfigDict(...) instead of class Config
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     project_id: str
     created_at: datetime
     metadata: Optional[Dict[str, Any]] = None # For token counts, latency, etc.
-
-    class Config:
-        from_attributes = True

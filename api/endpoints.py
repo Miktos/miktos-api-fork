@@ -38,6 +38,15 @@ async def health_check():
     """Simple health check endpoint that returns OK if the API is running."""
     return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()}
 
+# Add this near your existing endpoints
+@router.get(
+    "/status",
+    summary="API status check"
+)
+async def check_status():
+    """Check API status - simple status endpoint for monitoring."""
+    return {"status": "ok", "version": "0.2.0"}
+
 # Generation endpoint
 @router.post(
     "/generate",

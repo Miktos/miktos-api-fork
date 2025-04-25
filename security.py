@@ -1,27 +1,25 @@
 # miktos_backend/security.py
-
-from datetime import datetime, timedelta, timezone # Ensure timezone is imported
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
-from passlib.context import CryptContext
-from config.settings import settings # Import your settings
+from config.settings import settings
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session
+from config.database import get_db
+from models.database_models import User
+import schemas
 
-# --- Password Hashing ---
-# Use CryptContext for handling password hashing and verification
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifies a plain password against a hashed password."""
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    """Hashes a plain password."""
-    return pwd_context.hash(password)
+# Import from utils instead of defining locally
+from utils.password_utils import verify_password, get_password_hash
 
 # --- JWT Token Handling ---
 ALGORITHM = "HS256"
 # Use ACCESS_TOKEN_EXPIRE_MINUTES from settings if defined, otherwise default
 ACCESS_TOKEN_EXPIRE_MINUTES = getattr(settings, 'ACCESS_TOKEN_EXPIRE_MINUTES', 30) # Default to 30 minutes
+
+# Create OAuth2 scheme for token validation
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Creates a JWT access token."""
@@ -40,8 +38,40 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=ALGORITHM)
     return encoded_jwt
 
-# Note: The get_current_user dependency logic is typically placed within the
-#       auth router file (api/auth.py) or sometimes in a dedicated dependencies.py,
-#       as it often requires access to database sessions and user repositories.
-#       It's less common to put the full dependency function here in security.py,
-#       though helper functions for decoding might live here.
+# Direct database query version of get_current_user to avoid circular imports
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    Dependency function to get the current authenticated user based on JWT token.
+    Uses direct DB query to avoid circular imports.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        # Decode the JWT token
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")  # The subject should be the user ID
+        if user_id is None:
+            raise credentials_exception
+        
+        # Create token data from the payload
+        token_data = schemas.TokenData(user_id=user_id)
+    except JWTError:
+        # If token is invalid, raise exception
+        raise credentials_exception
+    
+    # Get the user from the database directly without using UserRepository
+    user = db.query(User).filter(User.id == token_data.user_id).first()
+    
+    if user is None:
+        # If user doesn't exist, raise exception
+        raise credentials_exception
+        
+    # User is authenticated, return user object
+    return user

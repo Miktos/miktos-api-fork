@@ -1,27 +1,70 @@
 # models/database_models.py
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, DateTime, JSON, Enum #<-- Import Enum
+from sqlalchemy import (Boolean, Column, ForeignKey, Integer, String, Text,
+                        DateTime, JSON, Enum)
+from sqlalchemy.dialects.postgresql import UUID  # We'll use PostgreSQL's UUID type and have sqlite handle it as a string
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from config.database import Base
 import uuid
-import enum # <-- Import enum
+import enum
 
-# --- NEW: Enum for Context Status ---
+# Create a custom UUID type for SQLite compatibility
+class GUID(TypeDecorator):
+    """Platform-independent GUID type.
+    
+    Uses PostgreSQL's UUID type when available, otherwise uses
+    String(36), storing as stringified UUID.
+    """
+    impl = String
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            return dialect.type_descriptor(UUID())
+        else:
+            return dialect.type_descriptor(String(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif dialect.name == 'postgresql':
+            return value
+        else:
+            if isinstance(value, str):
+                # Convert string to UUID if needed
+                try:
+                    return str(uuid.UUID(value))
+                except (ValueError, AttributeError):
+                    return str(value)
+            else:
+                # Already UUID object
+                return str(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        else:
+            if not isinstance(value, uuid.UUID):
+                try:
+                    return uuid.UUID(value)
+                except (ValueError, AttributeError):
+                    return value
+            else:
+                return value
+
+# Enum for Context Status
 class ContextStatus(enum.Enum):
-    PENDING = "PENDING"       # Waiting to be indexed
-    INDEXING = "INDEXING"     # Indexing in progress
-    READY = "READY"           # Indexing complete and usable
-    FAILED = "FAILED"         # Indexing failed
-    NONE = "NONE"             # No repository URL provided
-
-def generate_uuid():
-    return str(uuid.uuid4())
+    PENDING = "PENDING"
+    INDEXING = "INDEXING"
+    READY = "READY"
+    FAILED = "FAILED"
+    NONE = "NONE"
 
 class User(Base):
-    # ... (User model remains the same) ...
     __tablename__ = "users"
-
-    id = Column(String, primary_key=True, default=generate_uuid)
+    # Use custom GUID type
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
     username = Column(String, unique=True, index=True, nullable=True)
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
@@ -34,34 +77,27 @@ class User(Base):
 
 class Project(Base):
     __tablename__ = "projects"
-
-    id = Column(String, primary_key=True, default=generate_uuid)
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
     name = Column(String, index=True)
     description = Column(Text, nullable=True)
     context_notes = Column(Text, nullable=True)
-    owner_id = Column(String, ForeignKey("users.id"))
+    # Use custom GUID type for foreign key
+    owner_id = Column(GUID(), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    repository_url = Column(String, nullable=True)
+    context_status = Column(Enum(ContextStatus), default=ContextStatus.NONE, nullable=False)
 
-    # --- ADDED Fields for Codebase Context ---
-    repository_url = Column(String, nullable=True) # Store the Git repository URL
-    context_status = Column(Enum(ContextStatus), default=ContextStatus.NONE, nullable=False) # Track indexing status
-
-    # Relationships
     owner = relationship("User", back_populates="projects")
-    messages = relationship(
-        "Message",
-        back_populates="project",
-        cascade="all, delete-orphan"
-    )
+    messages = relationship("Message", back_populates="project", cascade="all, delete-orphan")
 
 class Message(Base):
-    # ... (Message model remains the same) ...
     __tablename__ = "messages"
-
-    id = Column(String, primary_key=True, default=generate_uuid)
-    project_id = Column(String, ForeignKey("projects.id"), nullable=False, index=True)
-    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # Use custom GUID type
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    # Use custom GUID type for foreign keys
+    project_id = Column(GUID(), ForeignKey("projects.id"), nullable=False, index=True)
+    user_id = Column(GUID(), ForeignKey("users.id"), nullable=False, index=True)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     model = Column(String, nullable=True)

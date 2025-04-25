@@ -73,10 +73,10 @@ app.include_router(
 )
 
 # Projects Router
+# The prefix "/api/v1/projects" is defined within projects.router itself
 app.include_router(
-    projects.router,
-    prefix="/api/v1/projects", # Prefix already defined correctly
-    # tags=["Projects"] # Tags likely defined in projects.py already
+    projects.router
+    # tags=["Projects"] # Tags are also defined within the router
 )
 
 
