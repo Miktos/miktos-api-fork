@@ -101,7 +101,7 @@ def process_repository_context(project_id: str, repo_path: str, session_factory:
                  # --- IMPROVED FILTERING ---
                  # Skip common non-text/code files - expand this list as needed
                  _, ext = os.path.splitext(file)
-                 if ext.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.lock', '.bin', '.exe', '.dll', '.so', '.dylib', '.zip', '.gz', '.tar', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.o', '.a', '.obj', '.class']:
+                 if ext.lower() in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.lock', '.bin', '.exe', '.dll', '.so', '.dylib', '.zip', '.gz', '.tar', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.o', '.a', '.obj', '.class', '.env']:
                       continue
                  # Consider adding .gitignore parsing here for more robust filtering
                  # --------------------------
