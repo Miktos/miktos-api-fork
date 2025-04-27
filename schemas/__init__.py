@@ -8,44 +8,31 @@ from .user import (
     UserUpdate
 )
 
-# Import Project related schemas
-from .user import (
-    ProjectBase,
+# Import Project related schemas (Corrected import source)
+from .project import (
     ProjectCreate,
     ProjectRead,
     ProjectUpdate
+    # Add ProjectBase here if it's defined in project.py and needed externally
+    # ProjectBase # Uncomment if needed
 )
 
-# Import Message related schemas
-# NOTE: You defined MessageRole in schemas/message.py previously.
-# It's better practice to keep schemas for different concepts in separate files.
-# If schemas/message.py exists and defines MessageRole, import it from there.
-# Otherwise, define MessageRole enum here or preferably in schemas/message.py
+# Import Message related schemas (Simplified import)
+from .message import (
+    MessageCreate,
+    MessageRead,
+    MessageUpdate,
+    MessageRole # Assuming MessageRole is defined in message.py
+    # Add MessageBase here if defined and needed
+    # MessageBase # Uncomment if needed
+)
 
-# Assuming schemas/message.py defines MessageRole, MessageCreate, MessageRead, MessageUpdate:
-try:
-    from .message import MessageCreate, MessageRead, MessageUpdate, MessageRole
-except ImportError:
-    # Fallback if message.py doesn't exist or is structured differently
-    # Import the schemas defined within user.py (less ideal structure)
-    print("Warning: Could not import from schemas.message.py, importing Message schemas from schemas.user.py")
-    from .user import (
-         MessageBase, # Import base if needed elsewhere
-         MessageCreate as MessageCreateFromUserFile, # Avoid name clash if MessageCreate exists in message.py
-         MessageRead as MessageReadFromUserFile,
-         MessageUpdate as MessageUpdateFromUserFile
-    )
-    # Define MessageRole here if it's not in message.py
-    import enum
-    class MessageRole(str, enum.Enum):
-         USER = "user"
-         ASSISTANT = "assistant"
+# Import Token related schemas
+from .token import Token, TokenData
 
-# Import Token related schemas (assuming token.py exists)
-try:
-    from .token import Token, TokenData
-except ImportError:
-    print("Warning: Could not import from schemas.token.py")
-    # Define fallback or handle missing file if necessary
-    Token = None
-    TokenData = None
+# --- REMOVED TRY/EXCEPT BLOCKS ---
+# The previous complex try/except logic is no longer needed
+# as we assume message.py and token.py are the definitive sources.
+# If these files *might* be missing in some configurations,
+# the try/except could be added back, but it's usually cleaner
+# to ensure the files exist.

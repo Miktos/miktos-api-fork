@@ -82,42 +82,59 @@ class ProjectRepository(BaseRepository[Project, ProjectCreate, ProjectUpdate]):
         print(f"[REPO DEBUG - create_with_owner] Returning db_obj.")
         return db_obj
     
+          
     def update_with_owner_check(self, *, project_id: str, owner_id: str, obj_in: Union[ProjectUpdate, Dict[str, Any]]) -> Optional[Project]:
         """
         Update a project but first verify it belongs to the specified owner.
         Also sets context_status to PENDING if repository_url is added or changed.
         """
-        # First get the project and check ownership
         db_obj = self.get_by_id_for_owner(project_id=project_id, owner_id=owner_id)
         if not db_obj:
             return None
-        
-        # Get the repository_url before update
+
         old_repo_url = db_obj.repository_url
-        
-        # Convert input to dict if it's a Pydantic model
+        old_status = db_obj.context_status # Store old status for logging
+
         if isinstance(obj_in, dict):
             update_data = obj_in
         else:
             update_data = obj_in.model_dump(exclude_unset=True)
-        
-        # Check if we're updating the repository_url
+
         repo_url_changed = "repository_url" in update_data and update_data["repository_url"] != old_repo_url
         adding_repo_url = old_repo_url is None and "repository_url" in update_data and update_data["repository_url"]
-        
-        # If repo URL is added or changed, set status to PENDING
-        if repo_url_changed or adding_repo_url:
-            update_data["context_status"] = ContextStatus.PENDING
-        
-        # Update the project
-        for field in update_data:
-            if field in update_data:
-                setattr(db_obj, field, update_data[field])
-        
-        self.db.add(db_obj)
-        self.db.commit()
-        self.db.refresh(db_obj)
-        
+
+        needs_pending_status = repo_url_changed or adding_repo_url
+
+        # Update fields from input data directly onto the object
+        changes_made = False
+        for field, value in update_data.items():
+             if hasattr(db_obj, field) and getattr(db_obj, field) != value:
+                 setattr(db_obj, field, value)
+                 changes_made = True
+                 print(f"[REPO DEBUG - update] Set {field} to {value}")
+
+        # Set status if required
+        # *** COMPARE ENUM VALUES ***
+        if needs_pending_status and db_obj.context_status.value != ContextStatus.PENDING.value:
+             db_obj.context_status = ContextStatus.PENDING
+             changes_made = True
+             print(f"[REPO DEBUG - update] Set context_status from {old_status.value if old_status else 'None'} to PENDING") # Log value
+        # *** END ENUM VALUE COMPARISON ***
+
+        # Only commit if changes were actually made
+        if changes_made:
+            try:
+                 self.db.add(db_obj)
+                 self.db.commit()
+                 self.db.refresh(db_obj)
+                 print(f"[REPO DEBUG - update] Commit successful. Refreshed status: {db_obj.context_status.value if db_obj.context_status else 'None'}") # Log value
+            except Exception as e:
+                 print(f"[REPO DEBUG - update] Commit/Refresh Error: {e}")
+                 self.db.rollback()
+                 raise e
+        else:
+             print("[REPO DEBUG - update] No actual changes detected, skipping commit.")
+
         return db_obj
     
     def remove_with_owner_check(self, *, project_id: str, owner_id: str) -> Optional[Project]:

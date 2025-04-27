@@ -661,3 +661,179 @@ def test_process_repository_context_chroma_add_fails(
     mock_session.add.assert_called_once_with(mock_project_for_fail_update)
     mock_session.commit.assert_called_once()
     mock_session.close.assert_called_once()
+
+
+
+# Test Scenario 6: DB Error during final status update (get fails)
+@patch('services.context_processor.os.path.isdir')
+@patch('services.context_processor.os.walk')
+@patch('services.context_processor.os.path.getsize')
+@patch('services.context_processor.os.path.splitext')
+@patch('builtins.open', new_callable=mock_open)
+@patch('services.context_processor.ProjectRepository')
+@patch('services.context_processor.get_chroma_client')
+@patch('services.context_processor.get_embedding_function')
+@patch('services.context_processor.time.time')
+def test_process_repository_context_final_get_fails(
+    mock_time, mock_get_emb_func, mock_get_chroma, mock_ProjectRepo, mock_open_func,
+    mock_splitext, mock_os_getsize, mock_os_walk, mock_os_isdir):
+    """
+    Test behavior when the final db get operation (before setting READY) fails.
+    The except block should then try to get again and set to FAILED.
+    """
+    # --- Arrange Mocks ---
+    # Arrange standard success path up until the final DB interaction
+    mock_os_isdir.return_value = True
+    mock_os_walk.return_value = MOCK_WALK_STRUCTURE
+    mock_os_getsize.side_effect = lambda path: MOCK_FILE_SIZES.get(path, 0)
+    # ... splitext setup ...
+    def splitext_side_effect(filename):
+        if filename == 'image.png': return ('image', '.png')
+        elif filename == '.env': return ('', '.env')
+        elif filename == 'main.py': return ('main', '.py')
+        elif filename == 'README.md': return ('README', '.md')
+        elif filename == 'utils.py': return ('utils', '.py')
+        elif filename == 'data.bin': return ('data', '.bin')
+        elif filename == '.config': return ('.config', '')
+        else: return os.path.splitext(filename)
+    mock_splitext.side_effect = splitext_side_effect
+    # ... open setup ...
+    def open_side_effect(path, *args, **kwargs):
+        if path in MOCK_FILE_CONTENT:
+            m = mock_open(read_data=MOCK_FILE_CONTENT[path])()
+            m.name = path
+            return m
+        else: raise FileNotFoundError(f"mock_open: File not found {path}")
+    mock_open_func.side_effect = open_side_effect
+    # ... Chroma setup ...
+    mock_chroma_client = MagicMock()
+    mock_collection = MagicMock()
+    mock_get_chroma.return_value = mock_chroma_client
+    mock_chroma_client.get_or_create_collection.return_value = mock_collection
+    mock_chroma_client.delete_collection.return_value = True
+    mock_get_emb_func.return_value = MagicMock()
+    mock_collection.add.return_value = None
+
+    # *** Database mocks: Make FIRST 'get' fail, SECOND 'get' succeed ***
+    mock_session = MagicMock(spec=Session)
+    mock_repo_instance_db = mock_ProjectRepo.return_value
+    mock_project_for_fail_update = create_mock_project(status=ContextStatus.INDEXING)
+    # Make 'get' fail the first time, succeed the second time (in except block)
+    mock_repo_instance_db.get.side_effect = [
+        Exception("Mock DB error on final get"),
+        mock_project_for_fail_update
+    ]
+    mock_session_factory = create_mock_session_factory(mock_session)
+
+    mock_time.side_effect = [6000.0, 6005.0]
+
+    # --- Act ---
+    process_repository_context(TEST_PROJECT_ID, DUMMY_REPO_PATH, mock_session_factory)
+
+    # --- Assert ---
+    # Check processing happened up to the failed DB call
+    mock_ProjectRepo.assert_called_once_with(mock_session)
+    mock_collection.add.assert_called_once()
+
+    # *** Check 'get' was attempted twice ***
+    assert mock_repo_instance_db.get.call_count == 2
+    mock_repo_instance_db.get.assert_called_with(id=TEST_PROJECT_ID) # Check last call args
+
+    # *** Check status is set to FAILED in the except block ***
+    assert mock_project_for_fail_update.context_status == ContextStatus.FAILED
+    # Check add/commit were called ONLY for the FAILED update
+    mock_session.add.assert_called_once_with(mock_project_for_fail_update)
+    mock_session.commit.assert_called_once()
+
+    mock_session.close.assert_called_once()
+
+
+# Test Scenario 7: DB Error during final status update (commit fails)
+@patch('services.context_processor.os.path.isdir')
+@patch('services.context_processor.os.walk')
+@patch('services.context_processor.os.path.getsize')
+@patch('services.context_processor.os.path.splitext')
+@patch('builtins.open', new_callable=mock_open)
+@patch('services.context_processor.ProjectRepository')
+@patch('services.context_processor.get_chroma_client')
+@patch('services.context_processor.get_embedding_function')
+@patch('services.context_processor.time.time')
+def test_process_repository_context_final_commit_fails(
+    mock_time, mock_get_emb_func, mock_get_chroma, mock_ProjectRepo, mock_open_func,
+    mock_splitext, mock_os_getsize, mock_os_walk, mock_os_isdir):
+    """
+    Test behavior when the final db commit operation (setting READY) fails.
+    The except block should then try to set status to FAILED.
+    """
+    # --- Arrange Mocks ---
+    # Arrange standard success path up until the final DB interaction
+    mock_os_isdir.return_value = True
+    mock_os_walk.return_value = MOCK_WALK_STRUCTURE
+    mock_os_getsize.side_effect = lambda path: MOCK_FILE_SIZES.get(path, 0)
+    # ... splitext setup ...
+    def splitext_side_effect(filename):
+        if filename == 'image.png': return ('image', '.png')
+        elif filename == '.env': return ('', '.env')
+        elif filename == 'main.py': return ('main', '.py')
+        elif filename == 'README.md': return ('README', '.md')
+        elif filename == 'utils.py': return ('utils', '.py')
+        elif filename == 'data.bin': return ('data', '.bin')
+        elif filename == '.config': return ('.config', '')
+        else: return os.path.splitext(filename)
+    mock_splitext.side_effect = splitext_side_effect
+    # ... open setup ...
+    def open_side_effect(path, *args, **kwargs):
+        if path in MOCK_FILE_CONTENT:
+            m = mock_open(read_data=MOCK_FILE_CONTENT[path])()
+            m.name = path
+            return m
+        else: raise FileNotFoundError(f"mock_open: File not found {path}")
+    mock_open_func.side_effect = open_side_effect
+    # ... Chroma setup ...
+    mock_chroma_client = MagicMock()
+    mock_collection = MagicMock()
+    mock_get_chroma.return_value = mock_chroma_client
+    mock_chroma_client.get_or_create_collection.return_value = mock_collection
+    mock_chroma_client.delete_collection.return_value = True
+    mock_get_emb_func.return_value = MagicMock()
+    mock_collection.add.return_value = None
+
+    # *** Database mocks: Make FIRST 'commit' fail, SECOND 'commit' succeed ***
+    mock_session = MagicMock(spec=Session)
+    mock_repo_instance_db = mock_ProjectRepo.return_value
+    mock_project_ready = create_mock_project(status=ContextStatus.INDEXING)
+    mock_project_fail = create_mock_project(status=ContextStatus.INDEXING) # Separate obj for fail update
+    # 'get' succeeds both times, returning appropriate object
+    mock_repo_instance_db.get.side_effect = [mock_project_ready, mock_project_fail]
+    # Make commit fail the first time, succeed the second time
+    mock_session.commit.side_effect = [
+        Exception("Mock DB error on final commit"),
+        None # Success on second commit
+    ]
+    mock_session_factory = create_mock_session_factory(mock_session)
+
+    mock_time.side_effect = [7000.0, 7005.0]
+
+    # --- Act ---
+    process_repository_context(TEST_PROJECT_ID, DUMMY_REPO_PATH, mock_session_factory)
+
+    # --- Assert ---
+    # Check processing happened
+    mock_ProjectRepo.assert_called_once_with(mock_session)
+    mock_collection.add.assert_called_once()
+
+    # Check get was called only once (before the failed READY commit)
+    mock_repo_instance_db.get.assert_called_once_with(id=TEST_PROJECT_ID) # Correct
+
+    # Check the status of the object that was actually modified
+    # The 'project' variable from the outer try block is reused.
+    assert mock_project_ready.context_status == ContextStatus.FAILED # Check the correct mock object
+
+    # Check add was called twice (once for READY attempt, once for FAILED attempt, both using mock_project_ready)
+    assert mock_session.add.call_count == 2
+    mock_session.add.assert_called_with(mock_project_ready) # Check the argument on the last call
+
+    # Check commit was called twice (READY attempt fails, FAILED attempt succeeds)
+    assert mock_session.commit.call_count == 2
+
+    mock_session.close.assert_called_once()

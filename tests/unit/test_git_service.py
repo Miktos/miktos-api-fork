@@ -596,3 +596,123 @@ def test_clone_or_update_unexpected_error_on_clone(
 
     # Cleanup might be attempted
     # mock_rmtree.assert_called_once_with(EXPECTED_REPO_PATH) # Optional
+
+
+
+# SCENARIO 11 (was TODO): Project Not Found in DB
+@patch('services.git_service.os.path.exists')
+@patch('services.git_service.Repo')
+@patch('services.git_service.ProjectRepository')
+@patch('services.git_service.process_repository_context')
+@patch('services.git_service.shutil.rmtree')
+def test_clone_or_update_project_not_found(
+    mock_rmtree, mock_process_context, mock_ProjectRepo, mock_GitRepo, mock_os_path_exists):
+    """
+    Test behavior when the initial project lookup returns None.
+    Should exit early with no git ops or status changes.
+    """
+    # --- Arrange Mocks ---
+    mock_session = MagicMock(spec=Session)
+    mock_repo_instance_db = mock_ProjectRepo.return_value
+    # *** Make initial 'get' return None ***
+    mock_repo_instance_db.get.return_value = None
+    mock_session_factory = create_mock_session_factory(mock_session)
+
+    # Mocks for functions that shouldn't be called
+    mock_os_path_exists.return_value = False
+    mock_GitRepo.clone_from = MagicMock()
+    mock_GitRepo.return_value.remotes.origin.fetch = MagicMock()
+    mock_process_context = MagicMock()
+    mock_rmtree.return_value = None
+
+    # --- Act ---
+    clone_or_update_repository(TEST_PROJECT_ID, TEST_REPO_URL, mock_session_factory)
+
+    # --- Assert ---
+    # DB setup and initial get are called
+    mock_ProjectRepo.assert_called_once_with(mock_session)
+    mock_repo_instance_db.get.assert_called_once_with(id=TEST_PROJECT_ID)
+
+    # No status updates should happen
+    mock_session.add.assert_not_called()
+    mock_session.commit.assert_not_called()
+
+    # Session should be closed (check based on the finally block logic for this case)
+    # The fixed finally block handles this correctly now
+    mock_session.close.assert_called_once()
+
+    # No Git, filesystem, or processor calls
+    mock_os_path_exists.assert_not_called()
+    mock_GitRepo.clone_from.assert_not_called()
+    if mock_GitRepo.call_count > 0: # Defensive
+        mock_GitRepo.return_value.remotes.origin.fetch.assert_not_called()
+    mock_process_context.assert_not_called()
+    mock_rmtree.assert_not_called()
+
+# SCENARIO 12 (was TODO): Unexpected Error during Git Fetch
+@patch('services.git_service.os.path.exists')
+@patch('services.git_service.Repo')
+@patch('services.git_service.ProjectRepository')
+@patch('services.git_service.process_repository_context')
+@patch('services.git_service.shutil.rmtree')
+@patch('services.git_service.traceback.print_exc') # Mock traceback printing
+def test_clone_or_update_unexpected_error_on_fetch(
+    mock_print_exc, mock_rmtree, mock_process_context, mock_ProjectRepo, mock_GitRepo, mock_os_path_exists):
+    """
+    Test behavior when an unexpected error (e.g., PermissionError) occurs during fetch.
+    Status should be set to FAILED, context processor not called, cleanup attempted.
+    """
+    # --- Arrange Mocks ---
+    mock_os_path_exists.return_value = True # Path DOES exist
+
+    # GitPython: Mock instance, make fetch raise unexpected error
+    mock_repo_instance_git = MagicMock(spec=GitRepo)
+    mock_repo_instance_git.remotes.origin.url = TEST_REPO_URL
+    mock_unexpected_error = PermissionError("Mock permission denied during fetch")
+    mock_repo_instance_git.remotes.origin.fetch.side_effect = mock_unexpected_error
+    mock_GitRepo.return_value = mock_repo_instance_git
+    mock_GitRepo.clone_from = MagicMock() # Ensure not called
+
+    # Database mocks
+    mock_session = MagicMock(spec=Session)
+    mock_repo_instance_db = mock_ProjectRepo.return_value
+    mock_project = create_mock_project(status=ContextStatus.PENDING)
+    mock_repo_instance_db.get.return_value = mock_project
+    mock_session_factory = create_mock_session_factory(mock_session)
+
+    mock_rmtree.return_value = None
+
+    # --- Act ---
+    clone_or_update_repository(TEST_PROJECT_ID, TEST_REPO_URL, mock_session_factory)
+
+    # --- Assert ---
+    # os.path.exists called for initial check and potentially cleanup
+    assert mock_os_path_exists.call_count >= 1
+    mock_os_path_exists.assert_any_call(EXPECTED_REPO_PATH)
+
+    mock_ProjectRepo.assert_called_once_with(mock_session)
+    # get called only once initially (failure handled using existing project obj)
+    mock_repo_instance_db.get.assert_called_once_with(id=TEST_PROJECT_ID)
+
+    # Final status should be FAILED
+    assert mock_project.context_status == ContextStatus.FAILED
+
+    # Session interactions: add(INDEXING), commit(INDEXING), add(FAILED), commit(FAILED)
+    assert mock_session.add.call_count == 2
+    mock_session.add.assert_called_with(mock_project)
+    assert mock_session.commit.call_count == 2
+    mock_session.close.assert_called_once()
+
+    # Git fetch was attempted
+    mock_GitRepo.assert_called_once_with(EXPECTED_REPO_PATH)
+    mock_repo_instance_git.remotes.origin.fetch.assert_called_once()
+    mock_GitRepo.clone_from.assert_not_called()
+
+    # Context processor was NOT called
+    mock_process_context.assert_not_called()
+
+    # Traceback print should be called by the main exception handler
+    mock_print_exc.assert_called_once()
+
+    # Cleanup should be attempted because path existed
+    mock_rmtree.assert_called_once_with(EXPECTED_REPO_PATH)

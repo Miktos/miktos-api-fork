@@ -240,10 +240,31 @@ async def update_project(
     repo_url_provided_in_update = 'repository_url' in update_data
 
     try:
-        updated_project = project_repo.update(db_obj=db_project, obj_in=update_data)
-        print(f"[API /projects PATCH] Project updated in DB. ID: {updated_project.id}, New Repo URL: {updated_project.repository_url}")
-        db.refresh(updated_project) # Refresh after update
-    except Exception as e: print(f"[API /projects PATCH] ERROR updating project in DB: {e}"); db.rollback(); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update project in database: {str(e)}")
+        # Call the correct repository method that handles context_status logic
+        updated_project = project_repo.update_with_owner_check(
+            project_id=project_id,      # Pass the project_id from path param
+            owner_id=current_user.id, # Pass the owner_id from auth dependency
+            obj_in=project_update       # Pass the Pydantic input model
+        )
+        # The repository method now handles commit and refresh internally
+        # db.refresh(updated_project) # Refresh is done inside update_with_owner_check
+
+        # Add a check just in case (shouldn't happen if get_by_id_for_owner passed before)
+        if updated_project is None:
+            print(f"[API /projects PATCH] ERROR: update_with_owner_check returned None unexpectedly for project {project_id}")
+            # If the initial get succeeded but update returns None, it implies an internal issue or race condition.
+            # 404 might still be appropriate, or 500 depending on how you view it.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project disappeared during update process")
+
+        print(f"[API /projects PATCH] Project update processed by repository. ID: {updated_project.id}, New Repo URL: {updated_project.repository_url}, New Status: {updated_project.context_status}")
+
+    except HTTPException as http_exc:
+        # Re-raise HTTPExceptions directly (like 404 from repo)
+        raise http_exc
+    except Exception as e:
+        print(f"[API /projects PATCH] ERROR processing project update: {e}")
+        # db.rollback() # Repository method should handle rollback on its commit failure
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process project update: {str(e)}")
 
     # Handle background task
     should_trigger_background_task = False
