@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, Annotated, Dict, Any
 import uuid
+import traceback # Keep for debugging if needed
 
 # --- Corrected Imports ---
 from dependencies import get_db
@@ -98,11 +99,7 @@ async def create_project(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> JSONResponse:
-    """
-    Create a new project owned by the current user.
-    Triggers background processing if repository_url is provided.
-    """
-    # Debug logging
+    # ... (rest of the endpoint code is correct) ...
     try:
         body_json = await request.json()
         print(f"[API DEBUG] Raw request body JSON: {body_json}")
@@ -123,7 +120,7 @@ async def create_project(
     try:
         created_project = project_repo.create_with_owner(
             obj_in=project_in,
-            owner_id=current_user.id
+            owner_id=str(current_user.id) # Ensure owner_id is string
         )
         print(f"[API /projects POST] Project created in DB. ID: {created_project.id}, Repo URL: {created_project.repository_url}")
         # Refresh to get latest DB state (good practice)
@@ -161,9 +158,7 @@ async def create_project(
     result = serialize_project(created_project)
     print(f"[API DEBUG] Final response data: {result}")
 
-    # REMOVED: db.commit() - Let the dependency fixture handle commit/rollback
     return JSONResponse(content=result, status_code=status.HTTP_201_CREATED)
-
 
 @router.get("/", response_model=None)
 async def get_projects(
@@ -176,15 +171,12 @@ async def get_projects(
     """ Get all projects owned by the current user. """
     project_repo = ProjectRepository(db=db)
     projects = project_repo.get_multi_by_owner(
-        owner_id=current_user.id, skip=skip, limit=limit
+        owner_id=str(current_user.id), skip=skip, limit=limit # Ensure owner_id is string
     )
     result = serialize_projects(projects)
     print(f"[API DEBUG] Get projects response count: {len(result)}")
-    # REMOVED: db.commit()
     return JSONResponse(content=result)
 
-
-# --- Corrected get_project endpoint ---
 @router.get("/{project_id}", response_model=None)
 async def get_project(
     project_id: uuid.UUID, # Use correct type hint
@@ -196,7 +188,7 @@ async def get_project(
     print(f"[API DEBUG] Getting project with ID: {project_id} for user {current_user.id}")
     project_repo = ProjectRepository(db=db)
     # Use the repository method directly
-    project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=current_user.id)
+    project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=str(current_user.id)) # Ensure owner_id is string
 
     if not project:
         print(f"[API DEBUG] Project {project_id} not found or not owned by user {current_user.id}")
@@ -207,7 +199,6 @@ async def get_project(
 
     result = serialize_project(project)
     print(f"[API DEBUG] Get project response: {result}")
-    # REMOVED: db.commit()
     return JSONResponse(content=result)
 
 
@@ -221,9 +212,8 @@ async def update_project(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> JSONResponse:
-    """ Update a project's details (must be owned by the current user). """
+    # ... (rest of the endpoint code is correct) ...
     print(f"[API DEBUG] Updating project {project_id} for user {current_user.id}")
-    # Debug logging
     try: body_json = await request.json(); print(f"[API DEBUG] Raw request body JSON: {body_json}")
     except Exception as e: raw_body = await request.body(); print(f"[API DEBUG] Error reading request body as JSON: {e}, Raw Body: {raw_body!r}")
 
@@ -233,37 +223,28 @@ async def update_project(
     if not update_data: raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No update data provided.")
 
     project_repo = ProjectRepository(db=db)
-    db_project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=current_user.id)
+    db_project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=str(current_user.id)) # Ensure owner_id is string
     if not db_project: print(f"[API DEBUG] Project {project_id} not found or not owned by user {current_user.id} for update"); raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found or not owned by current user to update")
 
     original_repo_url = db_project.repository_url
     repo_url_provided_in_update = 'repository_url' in update_data
 
     try:
-        # Call the correct repository method that handles context_status logic
         updated_project = project_repo.update_with_owner_check(
-            project_id=project_id,      # Pass the project_id from path param
-            owner_id=current_user.id, # Pass the owner_id from auth dependency
-            obj_in=project_update       # Pass the Pydantic input model
+            project_id=project_id,
+            owner_id=str(current_user.id), # Ensure owner_id is string
+            obj_in=project_update
         )
-        # The repository method now handles commit and refresh internally
-        # db.refresh(updated_project) # Refresh is done inside update_with_owner_check
-
-        # Add a check just in case (shouldn't happen if get_by_id_for_owner passed before)
         if updated_project is None:
             print(f"[API /projects PATCH] ERROR: update_with_owner_check returned None unexpectedly for project {project_id}")
-            # If the initial get succeeded but update returns None, it implies an internal issue or race condition.
-            # 404 might still be appropriate, or 500 depending on how you view it.
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project disappeared during update process")
 
         print(f"[API /projects PATCH] Project update processed by repository. ID: {updated_project.id}, New Repo URL: {updated_project.repository_url}, New Status: {updated_project.context_status}")
 
     except HTTPException as http_exc:
-        # Re-raise HTTPExceptions directly (like 404 from repo)
         raise http_exc
     except Exception as e:
         print(f"[API /projects PATCH] ERROR processing project update: {e}")
-        # db.rollback() # Repository method should handle rollback on its commit failure
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process project update: {str(e)}")
 
     # Handle background task
@@ -282,12 +263,10 @@ async def update_project(
     elif repo_url_provided_in_update: print(f"[API /projects PATCH] Repo URL provided, but conditions not met to trigger background task (URL same or status not PENDING).")
     else: print(f"[API /projects PATCH] No repository URL in update data or conditions not met, skipping background task trigger.")
 
-    # Prepare response
     print(f"[API /projects PATCH] Preparing response.")
     result = serialize_project(updated_project)
     print(f"[API DEBUG] Final update response: {result}")
 
-    # REMOVED: db.commit()
     return JSONResponse(content=result)
 
 
@@ -304,7 +283,7 @@ async def delete_project(
     project_repo = ProjectRepository(db=db)
     deleted_project = project_repo.remove_with_owner_check(
         project_id=project_id,
-        owner_id=current_user.id
+        owner_id=str(current_user.id) # Ensure owner_id is string
     )
     if not deleted_project:
         print(f"[API DEBUG] Project {project_id} not found or not owned by user {current_user.id} for deletion")
@@ -317,8 +296,7 @@ async def delete_project(
         print(f"[API /projects DELETE] Background task added successfully.")
     except Exception as e: print(f"[API /projects DELETE] ERROR adding background task: {e}")
 
-    # REMOVED: db.commit() - delete is typically committed by repo method or fixture
-    return None
+    return None # Return None for 204 status code
 
 
 @router.get("/{project_id}/messages", response_model=None)
@@ -333,11 +311,20 @@ async def get_project_messages(
     """ Get all messages for a specific project (must be owned by the current user). """
     print(f"[API DEBUG] Getting messages for project {project_id} for user {current_user.id}")
     project_repo = ProjectRepository(db=db)
-    project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=current_user.id)
-    if not project: print(f"[API DEBUG] Project {project_id} not found or not owned by user {current_user.id} for message retrieval"); raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found or not owned by current user")
+    project = project_repo.get_by_id_for_owner(project_id=project_id, owner_id=str(current_user.id)) # Ensure owner_id is string
+    if not project:
+        print(f"[API DEBUG] Project {project_id} not found or not owned by user {current_user.id} for message retrieval")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found or not owned by current user")
 
     message_repo = MessageRepository(db=db)
-    messages = message_repo.get_multi_by_project(project_id=project_id, skip=skip, limit=limit)
+    # --- FIX: Pass user_id to get_multi_by_project ---
+    messages = message_repo.get_multi_by_project(
+        project_id=project_id,
+        user_id=str(current_user.id), # Pass the user ID
+        skip=skip,
+        limit=limit
+        # ascending=True # Or False depending on desired default order
+    )
+    # --- END FIX ---
     result = [serialize_message(message) for message in messages]
-    # REMOVED: db.commit()
     return JSONResponse(content=result)

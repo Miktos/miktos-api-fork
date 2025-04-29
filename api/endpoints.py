@@ -1,28 +1,24 @@
 # miktos_backend/api/endpoints.py
 import datetime
-import json # Keep for potential error formatting if needed
+import json
+import traceback # Import traceback
 from fastapi import APIRouter, HTTPException, Body, Depends, status
-from fastapi.responses import StreamingResponse # Import StreamingResponse from fastapi
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import Optional, List, Dict, Any, AsyncGenerator # Added AsyncGenerator
+from typing import Optional, List, Dict, Any, AsyncGenerator
 
 # Import Pydantic Schemas used in this router
-# Import generation schemas directly from api/models.py (or wherever defined)
-from .models import GenerateRequest # Ensure this exists and includes project_id
+from .models import GenerateRequest
 
 # Import DB session and models
-# Assuming get_db is defined in 'dependencies.py' or similar
 from dependencies import get_db
 from models.database_models import User
 
-# Import Auth dependency and Repository Classes (only if needed for checks)
+# Import Auth dependency and Repository Classes
 from api.auth import get_current_user
-# Remove MessageRepository import - orchestrator handles saving
-# from repositories.message_repository import MessageRepository
-from repositories.project_repository import ProjectRepository # Keep if doing ownership check
+from repositories.project_repository import ProjectRepository
 
 # Import the core logic handler
-# Ensure orchestrator has the refactored process_generation_request
 from core import orchestrator
 
 # Create an API router (prefix is handled in main.py)
@@ -32,13 +28,18 @@ router = APIRouter()
 @router.get(
     "/health",
     summary="Health check endpoint"
-    # Tags applied in main.py
 )
 async def health_check():
     """Simple health check endpoint that returns OK if the API is running."""
-    return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()}
+    try:
+        # Python 3.11+ approach
+        return {"status": "ok", "timestamp": datetime.datetime.now(datetime.UTC).isoformat()}
+    except AttributeError:
+        # Fallback for older Python versions
+        from datetime import timezone
+        return {"status": "ok", "timestamp": datetime.datetime.now(timezone.utc).isoformat()}
 
-# Add this near your existing endpoints
+# Status check endpoint
 @router.get(
     "/status",
     summary="API status check"
@@ -50,15 +51,13 @@ async def check_status():
 # Generation endpoint
 @router.post(
     "/generate",
-    response_class=StreamingResponse, # Correct response class for streaming
+    response_class=StreamingResponse,
     summary="Generate AI completion and store conversation",
-    # Tags applied in main.py
 )
 async def generate_completion_endpoint(
-    payload: GenerateRequest = Body(...), # Use the schema, includes project_id
+    payload: GenerateRequest = Body(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
-    # Return type is handled by response_class
 ) -> StreamingResponse:
     """
     Generates a completion from an AI model specified in the request body,
@@ -71,14 +70,12 @@ async def generate_completion_endpoint(
     """
     print(f"Received generate request for project: {payload.project_id}") # Log request
 
-    # --- Optional: Verify Project Ownership ---
-    # This check is good practice before calling the orchestrator
+    # --- Verify Project Ownership ---
     project_repo = ProjectRepository(db=db)
     project = project_repo.get_by_id_for_owner(
         project_id=payload.project_id, owner_id=str(current_user.id)
     )
     if not project:
-        # How to return error in stream? Yield single error event.
         async def error_stream_404():
             error_data = {
                 "error": True,
@@ -104,29 +101,43 @@ async def generate_completion_endpoint(
         # Add any other relevant kwargs from payload if needed
     }
 
+    # ---- MODIFIED EXCEPTION HANDLING ----
+    caught_exception: Optional[Exception] = None # Variable to hold the exception if caught
+    sse_event_generator: Optional[AsyncGenerator[str, None]] = None
+
     try:
         # Call the orchestrator - it now returns an AsyncGenerator yielding SSE strings
-        sse_event_generator: AsyncGenerator[str, None] = orchestrator.process_generation_request(
+        sse_event_generator = orchestrator.process_generation_request(
             **orchestrator_args
         )
-
-        # Directly return the generator wrapped in StreamingResponse
+        # If orchestrator call succeeds, return the stream immediately
         return StreamingResponse(sse_event_generator, media_type="text/event-stream")
 
     except Exception as e:
         # Catch unexpected errors *before* starting the stream (e.g., during setup)
         print(f"Critical Error setting up stream in /generate endpoint for project {payload.project_id}: {e}")
-        # Log traceback here
-        import traceback
         traceback.print_exc()
-        # Return an error stream if setup fails
-        async def error_stream_500():
+        caught_exception = e # Store the exception
+
+    # If an exception was caught during setup, return the error stream
+    if caught_exception:
+        # Define the error stream function separately or pass args
+        async def error_stream_500(exc: Exception): # Pass the exception as an argument
             error_data = {
                 "error": True,
-                "message": f"Internal Server Error setting up generation stream: {str(e)}",
-                "type": type(e).__name__
+                 # Use the passed 'exc' argument here
+                "message": f"Internal Server Error setting up generation stream: {str(exc)}",
+                "type": type(exc).__name__
             }
+            # Ensure proper SSE format with double newline
             yield f'data: {json.dumps(error_data)}\n\n'
-        # Note: Cannot easily set 500 status code here with async generator error response
-        # The client will receive a 200 OK initially, then the error event.
-        return StreamingResponse(error_stream_500(), media_type="text/event-stream")
+        # Call the error stream function with the caught exception
+        return StreamingResponse(error_stream_500(caught_exception), media_type="text/event-stream")
+    # ---- END MODIFIED EXCEPTION HANDLING ----
+
+    # This part should theoretically not be reached if logic is correct,
+    # but added as a fallback defensive measure.
+    async def fallback_error_stream():
+         yield f'data: {json.dumps({"error": True, "message": "Unknown error occurred before streaming", "type": "UnknownError"})}\n\n'
+    print("ERROR: Reached end of /generate endpoint unexpectedly after try/except block.")
+    return StreamingResponse(fallback_error_stream(), media_type="text/event-stream", status_code=500)

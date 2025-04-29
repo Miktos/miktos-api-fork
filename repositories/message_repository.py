@@ -95,7 +95,8 @@ class MessageRepository(BaseRepository[Message, MessageCreate, MessageUpdate]):
         db_messages_to_add = []
         for msg_data in messages_data:
             role = msg_data.get("role")
-            model_name = default_model if role == "assistant" and default_model else msg_data.get("model")
+            # Check for model in message data first, then fall back to default for assistant messages
+            model_name = msg_data.get("model") or (default_model if role == "assistant" else None)
 
             db_message = self.model(
                 project_id=project_id,

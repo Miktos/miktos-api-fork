@@ -14,16 +14,18 @@ from models import database_models as models
 # --- Integration Client Imports ---
 from integrations import openai_client, claude_client, gemini_client
 
-# --- Model Provider Mapping (Unchanged) ---
+# --- Model Provider Mapping - MODIFIED ---
 def get_provider_from_model(model_id: str) -> Optional[str]:
-    """Determines the likely provider based on the model ID prefix."""
+    """Determines the likely provider based on the model ID prefix or structure."""
     model_id_lower = model_id.lower()
     if model_id_lower.startswith("gpt-"): return "openai"
     elif model_id_lower.startswith("claude-"): return "anthropic"
     elif model_id_lower.startswith("gemini-"): return "google"
     elif "/" in model_id_lower:
         provider = model_id_lower.split('/')[0]
-        if provider in ["openai", "google", "anthropic"]: return provider
+        # FIX: Return any provider found before the slash
+        # if provider in ["openai", "google", "anthropic"]: return provider # Old check
+        if provider: return provider # Return if non-empty
     return None
 
 # --- Main Orchestration Function - UPDATED ---

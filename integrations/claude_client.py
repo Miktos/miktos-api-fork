@@ -25,7 +25,13 @@ ANTHROPIC_API_VERSION = "2023-06-01"
 # --- Error Helper ---
 def _handle_anthropic_error(e: APIError) -> Dict[str, Any]:
     error_info = {"error": True, "message": str(e), "type": type(e).__name__}
-    if hasattr(e, 'status_code'): error_info["status_code"] = e.status_code
+    # FIX: Check for status_code on the response attribute
+    if hasattr(e, 'response') and e.response and hasattr(e.response, 'status_code'):
+        error_info["status_code"] = e.response.status_code
+    # Keep the original check as a fallback, though less likely for Anthropic's library
+    elif hasattr(e, 'status_code') and e.status_code:
+         error_info["status_code"] = e.status_code
+
     print(f"Anthropic API Error: {error_info}")
     return error_info
 

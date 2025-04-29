@@ -106,7 +106,7 @@ async def health_check():
 
 
 # --- Run with Uvicorn (if running python main.py directly) ---
-if __name__ == "__main__":
+if __name__ == "__main__": # pragma: no cover  <--- ADD THIS COMMENT
     print("Starting Uvicorn server directly from main.py...")
     # Use host="127.0.0.1" for local access only, or "0.0.0.0" to be accessible on your network
     # Port 8000 is the default for FastAPI examples
