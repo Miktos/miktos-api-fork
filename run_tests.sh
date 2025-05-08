@@ -6,8 +6,8 @@ if [ -d ".venv" ]; then
     source .venv/bin/activate
 fi
 
-# Run tests with coverage
-pytest -v "$@"
+# Run tests with coverage and ignore specific warnings
+pytest -v --disable-warnings "$@"
 
 # Return status from pytest
 exit $?
