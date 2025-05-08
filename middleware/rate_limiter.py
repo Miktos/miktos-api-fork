@@ -5,7 +5,7 @@ but can be configured to use Redis in production.
 """
 import time
 import os
-from typing import Dict, Optional, Union, Callable, Any
+from typing import Dict, Optional, Union, Callable, Any, List, Tuple
 from datetime import datetime, timedelta
 import asyncio
 from fastapi import Request, Response, HTTPException, status
@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from utils.logging import get_logger
+from config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -98,6 +99,42 @@ class RateLimiter:
             
         self.last_cleanup = now
 
+    def get_stats(self) -> Dict[str, Any]:
+        """Get statistics about the current rate limiter state"""
+        return {
+            "active_keys": len(self.data),
+            "last_cleanup": self.last_cleanup
+        }
+
+
+class EndpointRateLimit:
+    """Configuration for rate limits on specific endpoints or path patterns"""
+    
+    def __init__(
+        self, 
+        pattern: str, 
+        limit: int, 
+        window: int, 
+        description: str = ""
+    ):
+        """
+        Initialize endpoint rate limit configuration
+        
+        Args:
+            pattern: Path pattern to match (prefix match)
+            limit: Maximum requests allowed in the time window
+            window: Time window in seconds
+            description: Human-readable description of this rate limit
+        """
+        self.pattern = pattern
+        self.limit = limit
+        self.window = window
+        self.description = description
+    
+    def matches(self, path: str) -> bool:
+        """Check if the given path matches this rate limit pattern"""
+        return path.startswith(self.pattern)
+
 
 class RateLimiterMiddleware(BaseHTTPMiddleware):
     """
@@ -108,43 +145,59 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
         default_limit: Default requests per window
         default_window: Default window size in seconds
         exclude_paths: List of path prefixes to exclude from rate limiting
+        endpoint_limits: List of specific endpoint rate limits
         by_path: Whether to include path in the rate limit key
         by_ip: Whether to include IP in the rate limit key
-        block_paths: Path-specific rate limits
+        get_key_details: Optional callable to extract additional key details
     """
     
     def __init__(
         self,
         app,
-        limit: int = 100,
-        window: int = 60,
-        exclude_paths: Optional[list] = None,
+        default_limit: int = 100,
+        default_window: int = 60,
+        exclude_paths: Optional[List[str]] = None,
+        endpoint_limits: Optional[List[EndpointRateLimit]] = None,
         by_path: bool = True,
         by_ip: bool = True,
-        block_paths: Optional[dict] = None
+        get_key_details: Optional[Callable[[Request], str]] = None
     ):
         """
         Initialize the rate limiter middleware.
         
         Args:
             app: The FastAPI application
-            limit: Default requests per window
-            window: Default window size in seconds
+            default_limit: Default requests per window
+            default_window: Default window size in seconds
             exclude_paths: List of path prefixes to exclude from rate limiting
+            endpoint_limits: List of specific endpoint rate limits
             by_path: Whether to include path in the rate limit key
             by_ip: Whether to include IP in the rate limit key
-            block_paths: Dictionary mapping paths to their specific rate limits
+            get_key_details: Optional function to extract additional key details
         """
         super().__init__(app)
         self.limiter = RateLimiter()
-        self.default_limit = limit
-        self.default_window = window
+        self.default_limit = default_limit
+        self.default_window = default_window
         self.exclude_paths = exclude_paths or ["/docs", "/openapi.json", "/health"]
         self.by_path = by_path
         self.by_ip = by_ip
-        self.block_paths = block_paths or {}
+        self.endpoint_limits = endpoint_limits or []
+        self.get_key_details = get_key_details
+        
+        # Log startup information
+        limits_info = [
+            f"{limit.pattern} - {limit.limit}/{limit.window}s" 
+            for limit in self.endpoint_limits
+        ]
+        logger.info(
+            "Rate limiter initialized",
+            default=f"{default_limit}/{default_window}s",
+            endpoint_limits=limits_info,
+            excluded=self.exclude_paths
+        )
 
-    def should_rate_limit(self, request: Request) -> tuple:
+    def should_rate_limit(self, request: Request) -> Tuple[bool, int, int]:
         """
         Determine if a request should be rate limited and the applicable limits.
         
@@ -163,9 +216,13 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
         # Skip rate limiting when running in a test environment
         if os.environ.get('PYTEST_RUNNING') == '1':
             return False, 0, 0
-                
-        # Different rate limits based on path or method could be implemented here
-        # For now, use defaults for all requests
+        
+        # Check if this path matches any specific endpoint rate limit
+        for endpoint_limit in self.endpoint_limits:
+            if endpoint_limit.matches(path):
+                return True, endpoint_limit.limit, endpoint_limit.window
+        
+        # If no specific limit, use the defaults
         return True, self.default_limit, self.default_window
         
     def get_rate_limit_key(self, request: Request) -> str:
@@ -178,14 +235,35 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
         Returns:
             A string key for rate limiting
         """
-        # Get client IP - could be improved to handle proxies
-        client_ip = request.client.host if request.client else "unknown"
+        parts = []
         
-        # Get request path
-        path = request.url.path
+        # Add IP component if enabled
+        if self.by_ip:
+            # Try to get the real client IP (considering X-Forwarded-For header)
+            client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            if not client_ip:
+                client_ip = request.client.host if request.client else "unknown"
+            parts.append(f"ip:{client_ip}")
         
-        # Combine for the rate limit key
-        return f"ip:{client_ip}:path:{path}"
+        # Add path component if enabled
+        if self.by_path:
+            path = request.url.path
+            parts.append(f"path:{path}")
+            
+        # Add any custom key details if provided
+        if self.get_key_details:
+            custom_details = self.get_key_details(request)
+            if custom_details:
+                parts.append(custom_details)
+                
+        # If we have a user in the request state, add user ID
+        if hasattr(request.state, "user") and request.state.user:
+            user_id = getattr(request.state.user, "id", None)
+            if user_id:
+                parts.append(f"user:{user_id}")
+        
+        # Combine parts into the rate limit key
+        return ":".join(parts)
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """
@@ -227,7 +305,11 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
                 
                 # Use JSONResponse instead of Response for proper JSON serialization
                 response = JSONResponse(
-                    content={"detail": "Too many requests", "retry_after": int(rate_info["reset_in"])},
+                    content={
+                        "detail": "Too many requests", 
+                        "retry_after": int(rate_info["reset_in"]),
+                        "error": "rate_limit_exceeded"
+                    },
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     headers=headers
                 )
@@ -241,3 +323,87 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
             response.headers.update(headers)
         
         return response
+
+
+def get_rate_limiter_config():
+    """
+    Get rate limiter configuration without creating the middleware instance.
+    
+    Returns:
+        Dict with configuration parameters for RateLimiterMiddleware
+    """
+    # Define specific endpoint rate limits
+    endpoint_limits = [
+        # Auth endpoints - more permissive for login/register
+        EndpointRateLimit(
+            pattern="/api/v1/auth/login", 
+            limit=20, 
+            window=60,
+            description="Login attempts"
+        ),
+        EndpointRateLimit(
+            pattern="/api/v1/auth/register", 
+            limit=10, 
+            window=600,  # 10 minutes
+            description="Registration attempts"
+        ),
+        
+        # AI Generation endpoints - more restrictive
+        EndpointRateLimit(
+            pattern="/api/v1/generate", 
+            limit=30, 
+            window=60,
+            description="AI generation requests"
+        ),
+        
+        # Project management - normal limits
+        EndpointRateLimit(
+            pattern="/api/v1/projects", 
+            limit=100, 
+            window=60,
+            description="Project management operations"
+        )
+    ]
+    
+    # Paths to exclude from rate limiting
+    exclude_paths = [
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/api/v1/health",
+        "/api/v1/status",
+    ]
+    
+    # Return the configuration dictionary
+    return {
+        "default_limit": 200,              # Default for unspecified endpoints
+        "default_window": 60,              # Default window is 1 minute
+        "exclude_paths": exclude_paths,
+        "endpoint_limits": endpoint_limits,
+        "by_path": True,                   # Include path in rate limit key
+        "by_ip": True                      # Include IP in rate limit key
+    }
+
+
+def create_rate_limiter(app) -> RateLimiterMiddleware:
+    """
+    Create and configure a rate limiter middleware based on application settings.
+    
+    Args:
+        app: FastAPI application
+        
+    Returns:
+        Configured RateLimiterMiddleware instance
+    """
+    config = get_rate_limiter_config()
+    
+    # Create the middleware instance
+    return RateLimiterMiddleware(
+        app=app,
+        default_limit=config["default_limit"],
+        default_window=config["default_window"],
+        exclude_paths=config["exclude_paths"],
+        endpoint_limits=config["endpoint_limits"],
+        by_path=config["by_path"],
+        by_ip=config["by_ip"]
+    )

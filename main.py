@@ -5,12 +5,16 @@ from sqlalchemy.orm import Session
 import uvicorn # <-- Import uvicorn for the run block
 
 # Import modules containing routers
-from api import endpoints, auth, projects
+from api import endpoints, auth, projects, admin
 
 # Import database configuration and base model
 # Assuming get_db is defined in config.database or dependencies
 # Adjust import if get_db comes from dependencies.py
 from config.database import engine, Base, SessionLocal #<-- Import SessionLocal if needed by background tasks
+from config.settings import settings
+
+# Import the enhanced rate limiter
+from middleware.rate_limiter import create_rate_limiter, RateLimiterMiddleware
 
 # Create database tables if they don't exist (for development)
 def create_db_and_tables():
@@ -29,7 +33,7 @@ create_db_and_tables()
 app = FastAPI(
     title="Miktós AI Orchestrator",
     description="A platform to interact with multiple AI models via a unified interface.",
-    version="0.2.0",
+    version=settings.VERSION,
     # --- Add OpenAPI URL for documentation ---
     openapi_url="/api/v1/openapi.json", # Standard practice to version the OpenAPI spec
     docs_url="/api/v1/docs",            # Serve Swagger UI under versioned path
@@ -37,23 +41,21 @@ app = FastAPI(
 )
 
 # --- CORS Middleware ---
-origins = [
-    "http://localhost:3000",
-    "http://localhost:5173", # Default Vite port
-    "http://localhost:5174", # Sometimes Vite uses next port
-    "http://localhost:8080", # Common alternative dev port
-    "http://localhost",
-    # Add your deployed frontend URL here when ready
-    # e.g., "https://your-frontend-domain.com"
-]
+origins = settings.CORS.ALLOW_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Allows all methods
-    allow_headers=["*"], # Allows all headers
+    allow_methods=settings.CORS.ALLOW_METHODS,
+    allow_headers=settings.CORS.ALLOW_HEADERS,
 )
+
+# --- Add Rate Limiter Middleware ---
+if not settings.is_testing():  # Skip in test environment
+    from middleware.rate_limiter import RateLimiterMiddleware, get_rate_limiter_config
+    rate_limit_config = get_rate_limiter_config()
+    app.add_middleware(RateLimiterMiddleware, **rate_limit_config)
 
 # --- Include API routers ---
 # Apply a consistent base prefix for all API V1 routes
@@ -79,13 +81,19 @@ app.include_router(
     # tags=["Projects"] # Tags are also defined within the router
 )
 
+# Admin Router
+app.include_router(
+    admin.router,
+    prefix="/api/v1/admin", # Admin endpoints under /api/v1/admin
+    tags=["Admin"] # Tag is also defined within the router
+)
 
 # --- Root Endpoint ---
 # This is outside the /api/v1 prefix
 @app.get("/", tags=["Root"])
 async def root():
     """Provides a simple welcome message for the API root."""
-    return {"message": "Welcome to Miktós AI Orchestration Platform API. Docs at /api/v1/docs"}
+    return {"message": f"Welcome to {settings.APP_NAME} API. Docs at /api/v1/docs"}
 
 # --- (Optional) Health Check Endpoint ---
 # Also outside /api/v1 prefix, or move into endpoints.router
@@ -110,4 +118,4 @@ if __name__ == "__main__": # pragma: no cover  <--- ADD THIS COMMENT
     print("Starting Uvicorn server directly from main.py...")
     # Use host="127.0.0.1" for local access only, or "0.0.0.0" to be accessible on your network
     # Port 8000 is the default for FastAPI examples
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=settings.PORT)

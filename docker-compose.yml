@@ -15,8 +15,22 @@ services:
       - DEBUG= "True"
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - JWT_SECRET=${JWT_SECRET}
+      - REDIS_URL=redis://redis:6379/0
+      - RESPONSE_CACHE_ENABLED=true
     volumes:
       - ./data:/app/data
+    depends_on:
+      - redis
+
+  # Redis service for caching
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
 
   test:
     build: .
@@ -39,7 +53,8 @@ services:
   #   volumes:
   #     - postgres_data:/var/lib/postgresql/data
 
-# Only uncomment this if you uncomment the db service above
-# volumes:
-#   postgres_data:
+volumes:
+  redis_data:
+  # Only uncomment this if you uncomment the db service above
+  # postgres_data:
 

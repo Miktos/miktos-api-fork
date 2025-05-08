@@ -70,35 +70,17 @@ class OpenAIClient(BaseLLMClient):
             Either a complete response or an async generator of response chunks.
         """
         if not self.is_configured or not self.client:
-            error_response: LLMResponse = {
-                "error": True,
-                "message": "OpenAI client not initialized...",
-                "type": "ConfigurationError",
-                "content": None,
-                "finish_reason": None,
-                "usage": None,
-                "model_name": "unknown",
-                "raw_response": None,
-                "status_code": None,
-                "error_code": None
-            }
-            
+            error_msg = "OpenAI client not initialized"
             if stream:
-                async def error_gen_oai_init() -> AsyncGenerator[LLMStreamChunk, None]:
-                    yield {
-                        "error": True,
-                        "message": "OpenAI client not initialized...",
-                        "type": "ConfigurationError",
-                        "delta": None,
-                        "is_final": True,
-                        "accumulated_content": "",
-                        "finish_reason": None,
-                        "usage": None,
-                        "model_name": None
-                    }
-                return error_gen_oai_init()
+                return self.handle_exception_for_stream(
+                    Exception(error_msg), 
+                    error_type="ConfigurationError"
+                )
             else:
-                return error_response
+                return self.create_standard_error_response(
+                    error_type="ConfigurationError",
+                    message=error_msg
+                )
         
         # Process system prompt if available
         processed_messages = []
@@ -151,43 +133,41 @@ class OpenAIClient(BaseLLMClient):
         
         # --- Error Handling ---
         except RateLimitError as e:
-            return self._handle_openai_error(e, stream)
+            if stream:
+                return self.handle_exception_for_stream(e, error_type="RateLimitError")
+            else:
+                return self._format_error_response(
+                    e, 
+                    "RateLimitError", 
+                    status_code=429, 
+                    error_code="rate_limit_exceeded"
+                )
         except APITimeoutError as e:
-            return self._handle_openai_error(e, stream)
+            if stream:
+                return self.handle_exception_for_stream(e, error_type="TimeoutError")
+            else:
+                return self._format_error_response(e, "TimeoutError", status_code=504)
         except APIError as e:
-            return self._handle_openai_error(e, stream)
+            if stream:
+                return self.handle_exception_for_stream(e)
+            else:
+                return self._format_error_response(
+                    e, 
+                    "APIError", 
+                    status_code=getattr(e, 'status_code', None),
+                    error_code=getattr(e, 'code', None)
+                )
         except Exception as e:
             print(f"Unexpected Error calling OpenAI API: {e}")
             traceback.print_exc()
-            error_data: LLMResponse = {
-                "error": True,
-                "message": f"An unexpected error occurred: {str(e)}",
-                "type": type(e).__name__,
-                "content": None,
-                "finish_reason": None,
-                "usage": None,
-                "model_name": "unknown",
-                "raw_response": None,
-                "status_code": None,
-                "error_code": None
-            }
             
             if stream:
-                async def error_gen_final() -> AsyncGenerator[LLMStreamChunk, None]:
-                    yield {
-                        "error": True,
-                        "message": f"An unexpected error occurred: {str(e)}",
-                        "type": type(e).__name__,
-                        "delta": None,
-                        "is_final": True,
-                        "accumulated_content": "",
-                        "finish_reason": None,
-                        "usage": None,
-                        "model_name": None
-                    }
-                return error_gen_final()
+                return self.handle_exception_for_stream(e)
             else:
-                return error_data
+                return self._format_error_response(
+                    e, 
+                    type(e).__name__
+                )
     
     async def _process_openai_stream(
         self, response_stream: Any

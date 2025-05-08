@@ -14,6 +14,9 @@ from models import database_models as models
 # --- Integration Client Imports ---
 from integrations import openai_client, claude_client, gemini_client
 
+# --- Import Response Cache Service ---
+from services.response_cache_service import response_cache
+
 # --- Model Provider Mapping - MODIFIED ---
 def get_provider_from_model(model_id: str) -> Optional[str]:
     """Determines the likely provider based on the model ID prefix or structure."""
@@ -28,6 +31,38 @@ def get_provider_from_model(model_id: str) -> Optional[str]:
         if provider: return provider # Return if non-empty
     return None
 
+# --- Helper to convert response to stream chunks ---
+async def response_to_stream(response: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+    """Convert a cached non-streaming response to streaming format."""
+    # First yield the content as a chunk
+    if response.get("content"):
+        yield {
+            "error": False,
+            "delta": response["content"],
+            "is_final": False,
+            "accumulated_content": response["content"],
+            "finish_reason": None,
+            "usage": response.get("usage"),
+            "model_name": response.get("model_name"),
+            "message": None,
+            "type": None,
+            "cached": True  # Mark as coming from cache
+        }
+    
+    # Then yield the final chunk
+    yield {
+        "error": False,
+        "delta": None,
+        "is_final": True,
+        "accumulated_content": response.get("content", ""),
+        "finish_reason": response.get("finish_reason"),
+        "usage": response.get("usage"),
+        "model_name": response.get("model_name"),
+        "message": None,
+        "type": None,
+        "cached": True  # Mark as coming from cache
+    }
+
 # --- Main Orchestration Function - UPDATED ---
 async def process_generation_request(
     *, # Force keyword arguments
@@ -40,6 +75,7 @@ async def process_generation_request(
     project_id: str,
     db: Session,
     user: models.User,
+    skip_cache: bool = False,  # New parameter to bypass cache when needed
     **provider_specific_kwargs
 ) -> AsyncGenerator[str, None]:
     """
@@ -124,8 +160,53 @@ async def process_generation_request(
               messages_for_api.insert(0, {"role": "user", "content": f"[START CONTEXT NOTES]\n{project_notes}\n[END CONTEXT NOTES]\n\nPlease use the above notes as context for my next message."})
               print(f"Prepending project notes ({len(project_notes)} chars) as faux user message.")
 
+    # --- 4. Check Cache First (New Section) ---
+    if not skip_cache:
+        try:
+            cached_response = await response_cache.get_cached_response(
+                messages=messages_for_api,
+                model_id=model,
+                temperature=temperature or 0.7,
+                system_prompt=final_system_prompt
+            )
+            
+            if cached_response:
+                print(f"Cache hit for request with model {model}!")
+                
+                # Convert the cached response to streaming format
+                if stream:
+                    # Add cache hit notification at the start of the stream
+                    yield f'data: {json.dumps({"info": True, "message": "Response retrieved from cache", "type": "CacheHit"})}\n\n'
+                    
+                    # Stream the cached response
+                    async for chunk in response_to_stream(cached_response):
+                        yield f'data: {json.dumps(chunk)}\n\n'
+                    
+                    # Save assistant message and return early
+                    try:
+                        assistant_message_schema = schemas.MessageCreate(
+                            project_id=project_id, 
+                            user_id=user.id, 
+                            role=schemas.MessageRole.ASSISTANT,
+                            content=cached_response.get("content", "").strip(), 
+                            model=cached_response.get("model_name", model)
+                        )
+                        msg_repo.create(obj_in=assistant_message_schema)
+                        print(f"Saved assistant message (from cache) for project {project_id}")
+                    except Exception as e:
+                        print(f"Error saving assistant message from cache for project {project_id}: {e}")
+                        
+                    return
+                else:
+                    # This shouldn't normally happen as our endpoint uses streaming
+                    yield f'data: {json.dumps(cached_response)}\n\n'
+                    return
+        except Exception as e:
+            print(f"Error checking cache: {e}")
+            # Continue with normal processing if cache check fails
+            yield f'data: {json.dumps({"warning": True, "message": "Cache lookup failed, using model API directly."})}\n\n'
 
-    # --- 4. Routing Logic (Use potentially modified messages_for_api) ---
+    # --- 5. Routing Logic (Use potentially modified messages_for_api) ---
     actual_model_id = model.split('/')[-1] if '/' in model else model
     if not provider: # Double check provider after potential note injection logic
         error_msg = f"Could not determine provider for model: {model}"
@@ -157,7 +238,7 @@ async def process_generation_request(
         yield f'data: {json.dumps({"error": True, "message": error_msg, "type": "RoutingError"})}\n\n'
         return
 
-    # --- 5. Execute Client Call & Handle Streaming (Unchanged from previous correct version) ---
+    # --- 6. Execute Client Call & Handle Streaming ---
     final_assistant_content = ""; final_model_name_used = actual_model_id; error_occurred = False
     try:
         stream_generator = await client_func(**client_args)
@@ -173,8 +254,33 @@ async def process_generation_request(
         error_occurred = True; print(f"Unexpected Error processing stream for {provider}: {e}"); import traceback; traceback.print_exc()
         error_msg = f"Stream processing error: {str(e)}"; yield f'data: {json.dumps({"error": True, "message": error_msg, "type": type(e).__name__})}\n\n'
 
+    # --- 7. Cache Successful Response ---
+    if not error_occurred and final_assistant_content and not skip_cache:
+        try:
+            # Prepare the response object to cache
+            response_to_cache = {
+                "error": False,
+                "content": final_assistant_content.strip(),
+                "finish_reason": "stop",  # Assume normal completion
+                "usage": None,  # We don't have usage stats for streamed responses
+                "model_name": final_model_name_used,
+                "raw_response": None
+            }
+            
+            # Cache the response asynchronously
+            asyncio.create_task(response_cache.cache_response(
+                messages=messages_for_api,
+                model_id=model,
+                temperature=temperature or 0.7,
+                response=response_to_cache,
+                system_prompt=final_system_prompt
+            ))
+            print(f"Caching response for future use (model: {model})")
+        except Exception as e:
+            print(f"Error caching response: {e}")
+            # Proceed even if caching fails
 
-    # --- 6. Save Assistant Message (Unchanged from previous correct version) ---
+    # --- 8. Save Assistant Message ---
     if not error_occurred and final_assistant_content:
         try:
             assistant_message_schema = schemas.MessageCreate(

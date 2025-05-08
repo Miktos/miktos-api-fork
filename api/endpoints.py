@@ -27,7 +27,9 @@ router = APIRouter()
 # Health check endpoint
 @router.get(
     "/health",
-    summary="Health check endpoint"
+    summary="Health check endpoint",
+    description="Simple health check that confirms the API is running correctly. Returns status and UTC timestamp.",
+    tags=["System"]
 )
 async def health_check():
     """Simple health check endpoint that returns OK if the API is running."""
@@ -42,7 +44,9 @@ async def health_check():
 # Status check endpoint
 @router.get(
     "/status",
-    summary="API status check"
+    summary="API status check",
+    description="Check API status information including version number for monitoring.",
+    tags=["System"]
 )
 async def check_status():
     """Check API status - simple status endpoint for monitoring."""
@@ -53,6 +57,19 @@ async def check_status():
     "/generate",
     response_class=StreamingResponse,
     summary="Generate AI completion and store conversation",
+    description="""
+    Generates a streamed completion from specified AI model and saves the conversation history.
+    
+    The endpoint performs the following operations:
+    - Validates the user has access to the specified project
+    - Routes the request to the appropriate AI provider (OpenAI, Claude, Google)
+    - Attaches project context notes automatically if available
+    - Streams the AI response in real-time using Server-Sent Events
+    - Stores both user messages and AI responses in the project history
+    
+    Error responses are also streamed with appropriate error types and messages.
+    """,
+    tags=["AI Generation"]
 )
 async def generate_completion_endpoint(
     payload: GenerateRequest = Body(...),
