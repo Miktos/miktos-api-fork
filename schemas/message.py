@@ -29,11 +29,24 @@ class MessageRead(BaseModel):
     # Use model_config = ConfigDict(...) instead of class Config
     model_config = ConfigDict(
         from_attributes=True,  # Pydantic v2 style (replaces orm_mode)
-        json_encoders={
-            uuid.UUID: str,  # Convert UUID to string during JSON serialization
-            datetime: lambda dt: dt.isoformat(),  # Convert datetime to ISO format
-        },
     )
+    
+    # Override serialization methods for UUID and datetime
+    @classmethod
+    def model_serializer(cls, obj, **kwargs):
+        data = super().model_serializer(obj, **kwargs)
+        # Convert UUID to string
+        if "id" in data and isinstance(data["id"], uuid.UUID):
+            data["id"] = str(data["id"])
+        if "project_id" in data and isinstance(data["project_id"], uuid.UUID):
+            data["project_id"] = str(data["project_id"])
+        if "user_id" in data and isinstance(data["user_id"], uuid.UUID):
+            data["user_id"] = str(data["user_id"])
+        # Convert datetime to ISO format
+        for field, value in data.items():
+            if isinstance(value, datetime):
+                data[field] = value.isoformat()
+        return data
 
     id: str
     project_id: str

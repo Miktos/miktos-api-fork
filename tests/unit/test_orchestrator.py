@@ -78,6 +78,16 @@ def mock_llm_clients():
 
         yield { "openai": mock_openai, "claude": mock_claude, "gemini": mock_gemini }
 
+@pytest.fixture(autouse=True)
+def mock_response_cache():
+    """Disable response caching during tests"""
+    with patch('core.orchestrator.response_cache') as mock_cache:
+        # Configure get_cached_response to always return None (cache miss)
+        mock_cache.get_cached_response = AsyncMock(return_value=None)
+        # Configure cache_response to simply return True and not actually cache
+        mock_cache.cache_response = AsyncMock(return_value=True)
+        yield mock_cache
+
 # Helper async generator for mock LLM responses
 async def mock_llm_client_stream(content_chunks: List[Dict[str, Any]], finish_reason: str = "stop"):
     accumulated = ""

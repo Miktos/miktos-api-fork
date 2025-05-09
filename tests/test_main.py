@@ -19,7 +19,7 @@ def test_root_endpoint():
     """Test the root '/' endpoint."""
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json() == {"message": "Welcome to Miktós AI Orchestration Platform API. Docs at /api/v1/docs"}
+    assert response.json() == {"message": "Welcome to Miktos AI Orchestration Platform API. Docs at /api/v1/docs"}
 
 def test_root_health_check_endpoint():
     """Test the root '/health' endpoint."""

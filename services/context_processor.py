@@ -1,6 +1,7 @@
 # services/context_processor.py
 import os
 import chromadb
+import logging
 from chromadb.utils import embedding_functions
 from chromadb.config import Settings as ChromaSettings
 from sqlalchemy.orm import Session
@@ -12,6 +13,9 @@ import time # To measure processing time
 from models.database_models import Project, ContextStatus
 from repositories.project_repository import ProjectRepository
 # --- REMOVED IMPORT from services.git_service ---
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 CHROMA_DATA_PATH = os.path.abspath("./chroma_db_data")
@@ -51,12 +55,12 @@ def process_repository_context(project_id: str, repo_path: str, session_factory:
         session_factory: Callable to get a new DB Session.
     """
     start_time = time.time()
-    print(f"[ContextProcessor - Project {project_id}] Starting repository processing for path: {repo_path}") # Use repo_path
+    logger.info(f"[Project {project_id}] Starting repository processing for path: {repo_path}")
 
     # --- UPDATED: Use passed repo_path directly ---
     # repo_path = get_project_repo_path(project_id) # <--- REMOVED CALCULATION
     if not os.path.isdir(repo_path):
-        print(f"[ContextProcessor - ERROR - Project {project_id}] Repository path not found: {repo_path}")
+        logger.error(f"[Project {project_id}] Repository path not found: {repo_path}")
         return
 
     # --- Initialize DB Session ---
@@ -67,27 +71,27 @@ def process_repository_context(project_id: str, repo_path: str, session_factory:
 
     try:
         # --- Initialize ChromaDB & Model ---
-        print(f"[ContextProcessor - Project {project_id}] Initializing ChromaDB client and embedding model...")
+        logger.info(f"[Project {project_id}] Initializing ChromaDB client and embedding model...")
         chroma_client = get_chroma_client()
         embedding_function = get_embedding_function()
         collection_name = get_project_collection_name(project_id)
 
-        print(f"[ContextProcessor - Project {project_id}] Getting/Creating Chroma collection: {collection_name}")
+        logger.info(f"[Project {project_id}] Getting/Creating Chroma collection: {collection_name}")
         # --- Delete existing collection ---
         try:
              chroma_client.delete_collection(name=collection_name)
-             print(f"[ContextProcessor - Project {project_id}] Deleted existing collection.")
+             logger.info(f"[Project {project_id}] Deleted existing collection.")
         except Exception as delete_err:
-             print(f"[ContextProcessor - WARN - Project {project_id}] Could not delete collection {collection_name} (maybe didn't exist): {delete_err}")
+             logger.warning(f"[Project {project_id}] Could not delete collection {collection_name} (maybe didn't exist): {delete_err}")
         # --- Recreate collection ---
         collection = chroma_client.get_or_create_collection(
              name=collection_name,
              embedding_function=embedding_function
         )
-        print(f"[ContextProcessor - Project {project_id}] Ensured collection exists.")
+        logger.info(f"[Project {project_id}] Ensured collection exists.")
 
         # --- File Traversal, Filtering, Chunking ---
-        print(f"[ContextProcessor - Project {project_id}] Starting file traversal in {repo_path}...")
+        logger.info(f"[Project {project_id}] Starting file traversal in {repo_path}...")
         all_chunks: List[str] = []
         all_metadatas: List[Dict[str, Any]] = []
         all_ids: List[str] = []
@@ -111,7 +115,7 @@ def process_repository_context(project_id: str, repo_path: str, session_factory:
                  try:
                      # Check file size before reading - skip huge files?
                      if os.path.getsize(file_path) > 5 * 1024 * 1024: # Skip files larger than 5MB
-                          print(f"[ContextProcessor - WARN - Project {project_id}] Skipping large file {relative_path}")
+                          logger.warning(f"[Project {project_id}] Skipping large file {relative_path}")
                           continue
 
                      with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -136,47 +140,50 @@ def process_repository_context(project_id: str, repo_path: str, session_factory:
                          chunk_count += 1
                      file_count += 1
                  except Exception as read_err:
-                      print(f"[ContextProcessor - WARN - Project {project_id}] Failed to read/process file {file_path}: {read_err}")
+                      logger.warning(f"[Project {project_id}] Failed to read/process file {file_path}: {read_err}")
 
-        print(f"[ContextProcessor - Project {project_id}] Processed {file_count} files, generated {chunk_count} chunks.")
+        logger.info(f"[Project {project_id}] Processed {file_count} files, generated {chunk_count} chunks.")
 
         # --- Embedding and Storing ---
         if all_chunks:
-            print(f"[ContextProcessor - Project {project_id}] Adding {len(all_chunks)} chunks to Chroma collection...")
+            logger.info(f"[Project {project_id}] Adding {len(all_chunks)} chunks to Chroma collection...")
             # Add documents (ChromaDB handles batching)
             collection.add(
                 documents=all_chunks,
                 metadatas=all_metadatas,
                 ids=all_ids
             )
-            print(f"[ContextProcessor - Project {project_id}] Successfully added chunks to Chroma.")
+            logger.info(f"[Project {project_id}] Successfully added chunks to Chroma.")
         else:
-            print(f"[ContextProcessor - Project {project_id}] No processable chunks found in repository.")
+            logger.info(f"[Project {project_id}] No processable chunks found in repository.")
 
         # --- Update DB Status to READY ---
-        project = project_repo.get(id=project_id)
+        project = project_repo.get(project_id)
         if project:
             project.context_status = ContextStatus.READY
             db.add(project)
             db.commit()
         else:
-            print(f"[ContextProcessor - WARN - Project {project_id}] Project not found after processing.")
-        print(f"[ContextProcessor - Project {project_id}] Successfully processed repository context.")
+            logger.warning(f"[Project {project_id}] Project not found after processing.")
+        logger.info(f"[Project {project_id}] Successfully processed repository context.")
 
     except Exception as e:
-        print(f"[ContextProcessor - ERROR - Project {project_id}] Failed during context processing: {e}")
+        logger.error(f"[Project {project_id}] Failed during context processing: {e}", exc_info=True)
         # --- Update DB Status to FAILED ---
         try:
-            if not project: project = project_repo.get(id=project_id)
+            if not project: 
+                project = project_repo.get(project_id)
             if project:
                 project.context_status = ContextStatus.FAILED
                 db.add(project)
                 db.commit()
+            else:
+                logger.error(f"[Project {project_id}] Project not found")
         except Exception as db_err:
-            print(f"[ContextProcessor - ERROR - Project {project_id}] Failed to update status to FAILED in DB: {db_err}")
+            logger.error(f"[Project {project_id}] Failed to update status to FAILED in DB: {db_err}", exc_info=True)
     finally:
-        print(f"[ContextProcessor - Project {project_id}] Closing DB session.")
+        logger.info(f"[Project {project_id}] Closing DB session.")
         db.close()
 
     end_time = time.time()
-    print(f"[ContextProcessor - Project {project_id}] Processing finished in {end_time - start_time:.2f} seconds.")
+    logger.info(f"[Project {project_id}] Processing finished in {end_time - start_time:.2f} seconds.")

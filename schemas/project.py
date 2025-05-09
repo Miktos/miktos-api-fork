@@ -43,10 +43,6 @@ class ProjectRead(BaseModel):
 
     model_config = {
         "from_attributes": True,  # Pydantic v2 style for mapping from SQLAlchemy models
-        "json_encoders": {
-            uuid.UUID: str,  # Convert UUID to string during JSON serialization
-            datetime: lambda dt: dt.isoformat(),  # Convert datetime to ISO format
-        },
     }
 
     # Alternative method for model_dump if needed for direct serialization

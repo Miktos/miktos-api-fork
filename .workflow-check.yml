@@ -1,0 +1,44 @@
+name: Sync Repositories
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.REPO_SYNC_PAT }}
+      - name: Set up Git user
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+      
+      - name: Sync to all repositories
+        run: |
+          echo "Starting repository synchronization"
+          
+          git remote -v
+          git remote add backup https://x-access-token:${{ secrets.REPO_SYNC_PAT }}@github.com/Miktos/miktos-full.git || true
+          git remote add private-contest https://x-access-token:${{ secrets.REPO_SYNC_PAT }}@github.com/Miktos/miktos-core.git || true
+          git remote add org_fork https://x-access-token:${{ secrets.REPO_SYNC_PAT }}@github.com/Miktos/miktos-api-fork.git || true
+          git remote add public-contest https://x-access-token:${{ secrets.REPO_SYNC_PAT }}@github.com/Miktos/miktos-api.git || true
+          
+          echo "Pushing to main branches..."
+          git push backup main --force || echo "Failed to push to backup/main"
+          git push private-contest main --force || echo "Failed to push to private-contest/main"
+          
+          echo "Pushing to core-enhancements branches..."
+          git push backup core-enhancements --force || echo "Failed to push to backup/core-enhancements"
+          git push private-contest core-enhancements --force || echo "Failed to push to private-contest/core-enhancements"
+          
+          echo "Pushing to API repository branches..."
+          git push org_fork pr-api-submission --force || echo "Failed to push to org_fork/pr-api-submission"
+          git push public-contest pr-api-submission --force || echo "Failed to push to public-contest/pr-api-submission"
+          
+          echo "Repository synchronization completed"

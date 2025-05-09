@@ -44,14 +44,17 @@ class GUID(TypeDecorator):
     def process_result_value(self, value, dialect):
         if value is None:
             return value
-        else:
-            if not isinstance(value, uuid.UUID):
-                try:
-                    return uuid.UUID(value)
-                except (ValueError, AttributeError):
-                    return value
-            else:
-                return value
+        
+        try:
+            # Convert to UUID object for better test compatibility
+            if isinstance(value, str):
+                return uuid.UUID(value)
+            return uuid.UUID(str(value))
+        except (ValueError, TypeError, AttributeError):
+            # Fallback to string if UUID conversion fails
+            if not isinstance(value, str):
+                return str(value)
+            return value
 
 # Enum for Context Status
 class ContextStatus(enum.Enum):
@@ -69,6 +72,7 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)  # Added is_admin field
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

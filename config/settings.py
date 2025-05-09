@@ -2,7 +2,7 @@
 import os
 from typing import Dict, Optional, Any, List
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings
 
 # Load environment variables from .env file
@@ -37,7 +37,8 @@ class AuthSettings(BaseModel):
     TOKEN_EXPIRY_DAYS: int = Field(default=30, description="JWT token expiry in days")
     ALGORITHM: str = Field(default="HS256", description="JWT signing algorithm")
 
-    @validator("JWT_SECRET")
+    @field_validator("JWT_SECRET")
+    @classmethod
     def jwt_secret_must_be_secure(cls, v: str) -> str:
         if v == "dev_secret_key_change_in_production" and os.getenv("ENVIRONMENT", "").lower() == "production":
             raise ValueError("JWT_SECRET must be changed in production environment")
@@ -82,7 +83,8 @@ class CORSSettings(BaseModel):
         description="List of allowed HTTP headers"
     )
     
-    @validator("ALLOW_ORIGINS")
+    @field_validator("ALLOW_ORIGINS")
+    @classmethod
     def validate_origins_in_production(cls, v: List[str]) -> List[str]:
         if "*" in v and os.getenv("ENVIRONMENT", "").lower() == "production":
             print("WARNING: CORS is configured to allow all origins ('*') in a production environment.")
@@ -134,12 +136,12 @@ class Settings(BaseSettings):
     CORS: CORSSettings = Field(default_factory=CORSSettings)
     CACHE: CacheSettings = Field(default_factory=CacheSettings)
     
-    class Config:
-        """Pydantic configuration."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        env_nested_delimiter = "__"  # This allows nested settings like LOGGING__LEVEL=DEBUG in .env
-        case_sensitive = False  # Allow case-insensitive environment variable matching
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "env_nested_delimiter": "__",  # This allows nested settings like LOGGING__LEVEL=DEBUG in .env
+        "case_sensitive": False,  # Allow case-insensitive environment variable matching
+    }
 
     def is_development(self) -> bool:
         """Check if the environment is development."""

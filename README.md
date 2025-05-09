@@ -56,36 +56,56 @@ This project is maintained across multiple repositories for different purposes:
    pip install -r requirements.txt
    ```
 
-4. Set up environment variables:
+4. Configure environment variables:
+   - Copy `.env.example` to `.env` and fill in the required values
+   - Ensure API keys for all providers are configured
+
+### Running the Server
+
+#### Using the Simple Run Script (Recommended)
+```bash
+# Start the server on default port (8000)
+python simple_run.py start
+
+# Start the server in development mode with auto-reload
+python simple_run.py start --dev
+
+# Start the server on a specific port
+python simple_run.py start --port 9000
+
+# Check server status
+python simple_run.py status
+
+# Stop the server
+python simple_run.py stop
+```
+
+#### Using the Advanced Server Manager
+For more control over server instances:
+```bash
+# Start the server with specific parameters
+python server_manager.py start --host 0.0.0.0 --port 8000
+
+# Check if server is running on a specific port
+python server_manager.py status --port 8000
+
+# Stop a specific server instance
+python server_manager.py stop --pid 12345
+
+# Stop server running on specific port
+python server_manager.py stop --port 8000
+```
+
+#### Using Docker (for Production)
+1. Build and start containers:
    ```bash
-   # Create a .env file in the project root
-   cp .env.example .env
-   # Edit .env with your API keys and configuration
+   docker-compose up -d
    ```
 
-5. Run database migrations:
+2. Stop containers:
    ```bash
-   alembic upgrade head
+   docker-compose down
    ```
-
-6. Start the development server:
-   ```bash
-   python simple_run.py
-   # Or alternatively:
-   uvicorn main:app --reload
-   ```
-
-7. The API will be available at: http://localhost:8000
-   - API Documentation: http://localhost:8000/api/v1/docs
-   - ReDoc Documentation: http://localhost:8000/api/v1/redoc
-
-### Docker Deployment
-1. Build and start the containers:
-   ```bash
-   docker-compose up -d --build
-   ```
-
-2. The API will be available at: http://localhost:8000
 
 ## API Endpoints
 
@@ -120,6 +140,46 @@ This project is maintained across multiple repositories for different purposes:
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check endpoint |
 | GET | `/api/v1/status` | API status information |
+
+## Using the Server Management Tools
+
+### Simple Runner Script
+
+The `simple_run.py` script provides a user-friendly interface for common server operations:
+
+```bash
+# Start the server
+python simple_run.py start
+
+# Start with custom settings
+python simple_run.py start --port 9000 --debug --reload
+
+# Check server status
+python simple_run.py status
+
+# Stop server
+python simple_run.py stop
+```
+
+### Advanced Server Management
+
+For more advanced server management, use the `server_manager.py` script:
+
+```bash
+# Start server with specific settings
+python server_manager.py start --host 0.0.0.0 --port 8080 --workers 4
+
+# Find running instances
+python server_manager.py find
+
+# Stop all server instances
+python server_manager.py stop
+
+# Stop a specific instance
+python server_manager.py stop --port 8080
+```
+
+These tools help prevent port conflicts and make it easier to manage server instances.
 
 ## Testing
 
