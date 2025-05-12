@@ -99,21 +99,22 @@ def test_user(db_session: Session) -> User:
     try:
         db_session.flush() # Assign ID
         db_session.commit() # Commit user creation ONLY
-        db_session.refresh(new_user) # Refresh after commit
-        print(f"[Test User Fixture] Committed new test user with ID: {new_user.id}")
+        print(f"[Test User Fixture] Committed new user {new_user.id}")
     except Exception as e:
-        db_session.rollback()
-        pytest.fail(f"Failed to create test user: {e}")
+        print(f"[Test User Fixture] Error during new user flush/commit: {e}. Rolling back this attempt.")
+        db_session.rollback() # Rollback if commit fails to keep session clean for other operations
+        raise  # Or return None, depending on desired behavior
     return new_user
 
 
 # --- Test Client Fixtures (Sync) ---
 @pytest.fixture(scope="function")
 def client(override_get_db) -> Generator[TestClient, None, None]:
-    # ... (rest of fixture) ...
-    print("[Client Fixture] Creating basic TestClient.")
-    with TestClient(app) as test_client:
-        yield test_client
+    """Provides a TestClient instance for making HTTP requests to the app."""
+    print("[Client Fixture] Creating TestClient.")
+    with TestClient(app) as c:
+        yield c
+    print("[Client Fixture] TestClient context closed.")
 
 
 @pytest.fixture(scope="function")
@@ -131,3 +132,29 @@ def authenticated_client(client: TestClient, test_user: User) -> Generator[TestC
     client.headers = {"Authorization": f"Bearer {token}"}
     client.user_id_for_test = test_user.id
     yield client
+
+
+# --- ADDING PYTEST HOOKS FOR DEBUGGING FILE COLLECTION ---
+import sys
+
+# Comment out this hook entirely as it's preventing test collection
+# def pytest_collect_file(path, parent):
+#     print(f"\n[HOOK pytest_collect_file] Path: {path}")
+#     print(f"[HOOK pytest_collect_file] Parent: {parent}")
+#     # We need to return None to let pytest handle collection normally
+#     return None
+
+def pytest_itemcollected(item):
+    if "test_gemini_function_calling" in item.nodeid:
+        print(f"\n[HOOK pytest_itemcollected] Node ID: {item.nodeid}")
+        print(f"[HOOK pytest_itemcollected] FS Path: {item.fspath}")
+        if hasattr(item.module, '__file__') and item.module.__file__:
+            print(f"[HOOK pytest_itemcollected] item.module.__file__: {item.module.__file__}")
+        else:
+            print(f"[HOOK pytest_itemcollected] item.module does not have a __file__ attribute or it is None. Module: {item.module}")
+        try:
+            with open(item.fspath, 'r') as f:
+                first_line = f.readline().strip()
+                print(f"[HOOK pytest_itemcollected] First line of {item.fspath}: '{first_line}'")
+        except Exception as e:
+            print(f"[HOOK pytest_itemcollected] Error reading first line of {item.fspath}: {e}")

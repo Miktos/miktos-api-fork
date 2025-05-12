@@ -1,0 +1,210 @@
+# tests/unit/test_gemini_client_extended.py
+import pytest
+import sys
+import os
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
+from typing import AsyncGenerator, Dict, Any, Optional, List, Union, Iterable
+import asyncio
+
+# Add the root directory to the Python path to make imports work
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+# Import Google exceptions and types for mocking
+import google.generativeai as genai
+from google.api_core.exceptions import InvalidArgument, ResourceExhausted, ServiceUnavailable
+
+# Import the client we're testing
+import integrations.gemini_client as gemini_client
+from config.settings import settings
+
+# Create a version-agnostic safety feedback mock
+class MockSafetyFeedback:
+    """Version-independent mock for SafetyFeedback class."""
+    def __init__(self, category, probability):
+        self.category = category
+        self.probability = probability
+
+# Helper function to create a mock response with customizable attributes
+def create_mock_response(text="Test response", parts=None, candidates=None, prompt_feedback=None):
+    """Create a flexible mock response that can be configured for different test scenarios."""
+    mock_resp = MagicMock()
+    mock_resp.text = text
+    
+    if parts is None:
+        # Default parts with the same text
+        mock_part = MagicMock()
+        mock_part.text = text
+        mock_resp.parts = [mock_part]
+    else:
+        mock_resp.parts = parts
+    
+    if candidates is None:
+        mock_candidate = MagicMock()
+        mock_candidate.content.parts[0].text = text
+        mock_resp.candidates = [mock_candidate]
+    else:
+        mock_resp.candidates = candidates
+    
+    mock_resp.prompt_feedback = prompt_feedback
+    
+    return mock_resp
+
+@pytest.mark.asyncio
+async def test_generate_gemini_no_stream():
+    """Test non-streaming Gemini generation."""
+    # Mock the genai client 
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = create_mock_response(text="Test response")
+    
+    # Mock the genai.GenerativeModel constructor
+    with patch('google.generativeai.GenerativeModel', return_value=mock_model):
+        # Call the function
+        response = await gemini_client.generate_gemini(
+            messages=[{"role": "user", "content": "Test prompt"}],
+            model="gemini-1.5-pro",
+            stream=False,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Assert response structure
+        assert response["error"] is False
+        assert response["content"] == "Test response"
+        assert response["finish_reason"] is not None
+        assert response["model_name"] == "gemini-1.5-pro"
+
+@pytest.mark.asyncio
+async def test_generate_gemini_streaming():
+    """Test streaming Gemini generation."""
+    # Create a mock streaming response
+    async def mock_stream():
+        chunks = ["First", " chunk", " of", " response"]
+        for chunk in chunks:
+            mock_chunk = MagicMock()
+            mock_chunk.text = chunk
+            yield mock_chunk
+    
+    # Mock the genai client
+    mock_model = MagicMock()
+    mock_model.generate_content = MagicMock(return_value=mock_stream())
+    
+    # Mock the genai.GenerativeModel constructor
+    with patch('google.generativeai.GenerativeModel', return_value=mock_model):
+        # Call the streaming function
+        generator = gemini_client.generate_gemini(
+            messages=[{"role": "user", "content": "Test prompt"}],
+            model="gemini-1.5-pro",
+            stream=True,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Collect all chunks from the generator
+        chunks = []
+        async for chunk in generator:
+            chunks.append(chunk)
+        
+        # Check that we got the expected number of chunks plus the final one
+        assert len(chunks) > 0
+        # Verify the accumulated_content grows with each chunk
+        accumulated = ""
+        for i, chunk in enumerate(chunks[:-1]):  # All but the last one
+            assert chunk["error"] is False
+            assert chunk["is_final"] is False
+            accumulated += chunk["delta"]
+            assert chunk["accumulated_content"] == accumulated
+        
+        # Check the final chunk
+        assert chunks[-1]["is_final"] is True
+        assert chunks[-1]["finish_reason"] is not None
+
+@pytest.mark.asyncio
+async def test_generate_gemini_system_prompt():
+    """Test Gemini generation with a system prompt."""
+    # Mock the genai client
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = create_mock_response(text="Test response with system context")
+    
+    # Mock the genai.GenerativeModel constructor
+    with patch('google.generativeai.GenerativeModel', return_value=mock_model):
+        # Call the function with a system prompt
+        response = await gemini_client.generate_gemini(
+            messages=[{"role": "user", "content": "Test prompt"}],
+            model="gemini-1.5-pro", 
+            stream=False,
+            temperature=0.7,
+            max_tokens=1000,
+            system_prompt="This is a system instruction"
+        )
+        
+        # Assert correct system prompt handling
+        assert response["error"] is False
+        assert response["content"] == "Test response with system context"
+        
+        # Check that the system prompt was passed correctly
+        call_args = mock_model.generate_content.call_args
+        # The system prompt should have been included in the call
+        assert "This is a system instruction" in str(call_args)
+
+@pytest.mark.asyncio
+async def test_generate_gemini_error_handling():
+    """Test error handling in the Gemini client."""
+    # Mock the genai client to raise an exception
+    mock_model = MagicMock()
+    mock_model.generate_content.side_effect = ResourceExhausted("Rate limit exceeded")
+    
+    # Mock the genai.GenerativeModel constructor
+    with patch('google.generativeai.GenerativeModel', return_value=mock_model):
+        # Call the function
+        response = await gemini_client.generate_gemini(
+            messages=[{"role": "user", "content": "Test prompt"}],
+            model="gemini-1.5-pro",
+            stream=False,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Assert error response structure
+        assert response["error"] is True
+        assert "Rate limit exceeded" in response["message"]
+        assert response["type"] == "ResourceExhausted"
+
+@pytest.mark.asyncio
+async def test_generate_gemini_safety_block():
+    """Test handling of safety blocks in Gemini responses."""
+    # Create a mock response with safety feedback
+    mock_response = create_mock_response(text="")
+    
+    # Add safety feedback indicating the prompt was blocked
+    mock_response.prompt_feedback = MagicMock()
+    mock_response.prompt_feedback.block_reason = "SAFETY"
+    mock_response.prompt_feedback.safety_ratings = [
+        MockSafetyFeedback("HARM_CATEGORY_HARASSMENT", "HIGH")
+    ]
+    
+    # Mock candidates to be empty (as would happen with a blocked response)
+    mock_response.candidates = []
+    
+    # Mock the genai client
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = mock_response
+    
+    # Mock the genai.GenerativeModel constructor
+    with patch('google.generativeai.GenerativeModel', return_value=mock_model):
+        # Call the function
+        response = await gemini_client.generate_gemini(
+            messages=[{"role": "user", "content": "Test harmful prompt"}],
+            model="gemini-1.5-pro",
+            stream=False,
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # Assert safety block response structure
+        assert response["error"] is True
+        assert "safety" in response["message"].lower()
+        assert response["type"] == "SafetyError"
+
+# Add to existing test suite
+if __name__ == "__main__":
+    pytest.main(["-xvs", __file__])

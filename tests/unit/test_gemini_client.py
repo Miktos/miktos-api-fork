@@ -238,14 +238,36 @@ def ensure_gemini_client_configured(monkeypatch):
     else:
         print("\n--- Simulating Google Client Configured (API Key found) ---")
 
-    mock_to_thread = AsyncMock()
+    # Create a wrapper that captures the call correctly
+    async def mock_to_thread_wrapper(func, *args, **kwargs):
+        # If this is our _call_generate_content function, capture the args and call the mock
+        if func == gemini_client._call_generate_content and len(args) >= 2:
+            # The actual function to call is args[0]
+            generate_func = args[0]
+            # The content is args[1]
+            content_args = args[1:]
+            # Call the wrapped function with the content args
+            if generate_func == mock_model_instance.generate_content:
+                mock_model_instance.generate_content(*content_args)
+            return mock_response_holder.response
+        return mock_response_holder.response
+    
+    mock_to_thread = AsyncMock(side_effect=mock_to_thread_wrapper)
     monkeypatch.setattr(gemini_client.asyncio, "to_thread", mock_to_thread)
+    
+    # Use an object to hold the mock response that can be updated by tests
+    class MockResponseHolder:
+        def __init__(self):
+            self.response = None
+    
+    mock_response_holder = MockResponseHolder()
 
     yield {
         "mock_configure": mock_configure,
         "MockGenerativeModel": MockGenerativeModel,
         "mock_model_instance": mock_model_instance,
-        "mock_to_thread": mock_to_thread
+        "mock_to_thread": mock_to_thread,
+        "mock_response_holder": mock_response_holder
     }
 
 # --- Test Cases ---
@@ -258,7 +280,8 @@ async def test_generate_completion_gemini_non_streaming_success(ensure_gemini_cl
     mock_response = create_mock_gemini_response(
         text_content="Gemini says hi!", finish_reason=FinishReason.STOP
         )
-    mocks["mock_to_thread"].return_value = mock_response
+    # Set the response in the holder object
+    mocks["mock_response_holder"].response = mock_response
 
     # --- Act ---
     result = await gemini_client.generate_completion(
@@ -283,11 +306,14 @@ async def test_generate_completion_gemini_non_streaming_success(ensure_gemini_cl
     assert gen_config.max_output_tokens == 50
     assert gen_config.top_p == 0.9
 
+    # Verify to_thread was called
     mocks["mock_to_thread"].assert_awaited_once()
-    call_args, _ = mocks["mock_to_thread"].call_args
-    assert call_args[0] == mocks["mock_model_instance"].generate_content
+    # Verify generate_content was called (our wrapper ensures this happens)
+    mocks["mock_model_instance"].generate_content.assert_called_once()
+    # Get what was passed to generate_content
+    call_args = mocks["mock_model_instance"].generate_content.call_args
     expected_contents = [{'role': 'user', 'parts': [{'text': 'Hello Gemini'}]}]
-    assert call_args[1] == expected_contents
+    assert call_args[0][0] == expected_contents
 
     assert isinstance(result, dict)
     assert result.get("error") is False
@@ -339,7 +365,8 @@ async def test_generate_completion_gemini_filters_and_converts_messages(ensure_g
     ]
     expected_system_instruction = "System prompt here."
     mock_response = create_mock_gemini_response()
-    mocks["mock_to_thread"].return_value = mock_response
+    # Set the response in the holder object
+    mocks["mock_response_holder"].response = mock_response
 
     # --- Act ---
     await gemini_client.generate_completion(messages=messages_in, stream=False)
@@ -349,9 +376,11 @@ async def test_generate_completion_gemini_filters_and_converts_messages(ensure_g
     _, init_kwargs = mocks["MockGenerativeModel"].call_args
     assert init_kwargs.get("system_instruction") == expected_system_instruction
     mocks["mock_to_thread"].assert_awaited_once()
-    call_args, _ = mocks["mock_to_thread"].call_args
-    assert len(call_args) >= 2
-    assert call_args[1] == expected_contents
+    # Verify generate_content was called with the right arguments
+    mocks["mock_model_instance"].generate_content.assert_called_once()
+    # Get what was passed to generate_content
+    content_args = mocks["mock_model_instance"].generate_content.call_args[0][0]
+    assert content_args == expected_contents
 
 
 @pytest.mark.asyncio
@@ -365,18 +394,8 @@ async def test_generate_completion_gemini_non_streaming_blocked(ensure_gemini_cl
         is_blocked=True,
         block_reason=HarmProbability.HIGH # Use imported enum
     )
-    mocks["mock_to_thread"].return_value = mock_response
-    
-    # Create a test patch for gemini_client to handle the None content case correctly
-    original_to_thread = gemini_client.asyncio.to_thread
-    
-    async def patched_to_thread(*args, **kwargs):
-        result = await original_to_thread(*args, **kwargs)
-        # This ensures the test actually tests the error handling in gemini_client
-        # by verifying our mock setup is correct
-        return result
-        
-    monkeypatch.setattr(gemini_client.asyncio, "to_thread", patched_to_thread)
+    # Set the response in the holder object
+    mocks["mock_response_holder"].response = mock_response
 
     # --- Act ---
     result = await gemini_client.generate_completion(messages=TEST_MESSAGES_BASE, stream=False)

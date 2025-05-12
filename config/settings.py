@@ -8,6 +8,12 @@ from pydantic_settings import BaseSettings
 # Load environment variables from .env file
 load_dotenv()
 
+# Message role constants for AI conversation
+USER_ROLE = "user"
+ASSISTANT_ROLE = "assistant"
+FUNCTION_ROLE = "function"
+SYSTEM_ROLE = "system"
+
 class LoggingSettings(BaseModel):
     """Configuration for logging."""
     LEVEL: str = Field(default="INFO", description="Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")

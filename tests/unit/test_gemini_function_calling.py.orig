@@ -1,0 +1,116 @@
+"""
+Tests for Gemini client function calling capabilities
+"""
+
+import pytest
+from unittest.mock import MagicMock, patch, AsyncMock
+import uuid
+import asyncio
+from typing import Dict, Any, List
+
+# Import Message from models
+from integrations import gemini_client
+
+# Define role constants
+USER_ROLE = "user"
+ASSISTANT_ROLE = "assistant"
+SYSTEM_ROLE = "system"
+FUNCTION_ROLE = "function"
+
+# Sample function definitions
+SAMPLE_FUNCTIONS = [
+    {
+        "name": "search_database",
+        "description": "Search for information in the database",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "The city and state"
+                },
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "Temperature unit"
+                }
+            },
+            "required": ["location"]
+        }
+    }
+]
+
+
+@pytest.mark.asyncio
+async def test_gemini_function_calling():
+    """Test that Gemini client properly formats function calling."""
+    # Create message dictionary (not the model class)
+    message = {
+        "id": str(uuid.uuid4()),
+        "project_id": str(uuid.uuid4()),
+        "content": "What's the weather in San Francisco?",
+        "role": USER_ROLE
+    }
+    
+    # Mock a function call response from Gemini
+    mock_function_call = {
+        "name": "get_weather",
+        "args": {
+            "location": "San Francisco",
+            "unit": "celsius"
+        }
+    }
+    
+    # Create mock response with function call
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value.text = None  # No text for function calls
+    mock_model.generate_content.return_value.candidates = [MagicMock()]
+    mock_model.generate_content.return_value.candidates[0].finish_reason = MagicMock()
+    mock_model.generate_content.return_value.candidates[0].finish_reason.name = "FUNCTION_CALL"
+    mock_model.generate_content.return_value.parts = []
+    
+    # Add function call to the response
+    mock_model.generate_content.return_value.candidates[0].content = MagicMock()
+    mock_model.generate_content.return_value.candidates[0].content.parts = [MagicMock()]
+    mock_model.generate_content.return_value.candidates[0].content.parts[0].function_call = mock_function_call
+    
+    # Mock usage metadata
+    mock_model.generate_content.return_value.usage_metadata = MagicMock()
+    mock_model.generate_content.return_value.usage_metadata.prompt_token_count = 15
+    mock_model.generate_content.return_value.usage_metadata.candidates_token_count = 25
+    mock_model.generate_content.return_value.usage_metadata.total_token_count = 40
+    
+    # Setup patch
+    with patch("integrations.gemini_client.genai.GenerativeModel", return_value=mock_model), \
+         patch("integrations.gemini_client.asyncio.to_thread", new=AsyncMock(
+             return_value=mock_model.generate_content.return_value
+         )):
+        
+        # Call the function with function definitions
+        response = await gemini_client.generate_completion(
+            messages=[message],
+            system_prompt="You are a weather assistant.",
+            functions=SAMPLE_FUNCTIONS,
+            stream=False
+        )
+        
+        # Since the test is a stub, we'll just assert the key pieces
+        assert mock_model.generate_content.called
