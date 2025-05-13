@@ -115,3 +115,14 @@ class MessageRepository(BaseRepository[Message, MessageCreate, MessageUpdate]):
             # Querying back might be safer if you need the IDs immediately.
             # For now, returning without refresh.
         return db_messages_to_add
+
+    # --- Admin Statistics Methods ---
+    def count(self) -> int:
+        """Count total number of messages."""
+        return self.db.query(self.model).count()
+    
+    def count_since(self, since_datetime) -> int:
+        """Count messages created since a specific datetime."""
+        return self.db.query(self.model).filter(
+            self.model.created_at >= since_datetime
+        ).count()

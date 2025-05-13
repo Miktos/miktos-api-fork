@@ -78,6 +78,7 @@ class User(Base):
 
     projects = relationship("Project", back_populates="owner")
     messages = relationship("Message", back_populates="user")
+    activities = relationship("UserActivity", back_populates="user")
 
 class Project(Base):
     __tablename__ = "projects"
@@ -110,3 +111,16 @@ class Message(Base):
 
     project = relationship("Project", back_populates="messages")
     user = relationship("User", back_populates="messages")
+
+# User Activity Tracking
+class UserActivity(Base):
+    __tablename__ = "user_activities"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(GUID(), ForeignKey("users.id"), nullable=False, index=True)
+    activity_type = Column(String, nullable=False, index=True)
+    endpoint = Column(String, nullable=True, index=True)
+    details = Column(JSON, nullable=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    
+    user = relationship("User", back_populates="activities")

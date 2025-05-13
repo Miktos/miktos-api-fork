@@ -177,3 +177,7 @@ miktos_local.db
 
 test_db.sqlite
 *.sqlite-journal # Add journal files too
+
+# Server process and state files
+.server_pid
+.server_pid.json

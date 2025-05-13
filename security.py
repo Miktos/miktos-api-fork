@@ -41,11 +41,14 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 # Direct database query version of get_current_user to avoid circular imports
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    request: Optional[object] = None,  # This will be populated by FastAPI with the request object
 ) -> User:
     """
     Dependency function to get the current authenticated user based on JWT token.
     Uses direct DB query to avoid circular imports.
+    
+    Also stores user_id in request.state for use by activity logger middleware.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -72,6 +75,11 @@ async def get_current_user(
     if user is None:
         # If user doesn't exist, raise exception
         raise credentials_exception
+    
+    # Store user_id in request state if request is provided
+    # This will be used by the activity logger middleware
+    if request and hasattr(request, 'state'):
+        request.state.user_id = str(user.id)
         
     # User is authenticated, return user object
     return user

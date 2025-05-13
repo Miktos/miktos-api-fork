@@ -56,7 +56,23 @@ async def login_for_access_token(
     if not user:
         print(f"Authentication failed for: {form_data.username}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password", headers={"WWW-Authenticate": "Bearer"})
+    
     print(f"Authentication successful for user: {user.id}")
+    
+    # Record login activity
+    try:
+        from repositories.activity_repository import ActivityRepository
+        activity_repo = ActivityRepository(db)
+        activity_repo.record_activity(
+            user_id=str(user.id),
+            activity_type="login",
+            details={
+                "method": "password" 
+            }
+        )
+    except Exception as e:
+        print(f"Failed to record login activity: {str(e)}")
+    
     access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(data={"sub": str(user.id)}, expires_delta=access_token_expires)
     print(f"Generated token for user: {user.id}")

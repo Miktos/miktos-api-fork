@@ -113,3 +113,12 @@ class UserRepository(BaseRepository[User, UserCreate, UserUpdate]):
 
         print(f"--- [Authenticate Method DEBUG] Password verification PASSED for user {user.id}. Returning user object. ---")
         return user  # Authentication successful
+
+    # --- Admin Statistics Methods ---
+    def count(self) -> int:
+        """Count total number of users."""
+        return self.db.query(self.model).count()
+
+    def count_active(self) -> int:
+        """Count number of active users."""
+        return self.db.query(self.model).filter(self.model.is_active == True).count()

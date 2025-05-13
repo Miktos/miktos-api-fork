@@ -1,0 +1,5 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+# Minimal config to allow commits.
+# Add specific hooks here later.
+repos: []

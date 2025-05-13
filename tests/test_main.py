@@ -47,11 +47,12 @@ def test_routers_mounted():
 
 # Test the exception handling in create_db_and_tables
 @patch('main.Base.metadata.create_all') # Patch where create_all is called
-@patch('main.print') # Patch the print function to check output
-def test_create_db_and_tables_exception(mock_print: MagicMock, mock_create_all: MagicMock):
+@patch('main.logger.info') # Patch the logger.info method
+@patch('main.logger.error') # Patch the logger.error method
+def test_create_db_and_tables_exception(mock_logger_error: MagicMock, mock_logger_info: MagicMock, mock_create_all: MagicMock):
     """
     Test the exception handling during initial table creation by checking
-    if the error is caught and printed.
+    if the error is caught and logged.
     """
     test_error_message = "Simulated DB connection error"
     mock_create_all.side_effect = SQLAlchemyError(test_error_message)
@@ -66,11 +67,9 @@ def test_create_db_and_tables_exception(mock_print: MagicMock, mock_create_all: 
 
     # Verify create_all was called (even though it failed)
     mock_create_all.assert_called_once()
-    # Verify the error message was printed by the except block
-    mock_print.assert_has_calls([
-        call("Checking/Creating database tables..."),
-        call(f"Error creating database tables: {test_error_message}")
-    ], any_order=False)
+    # Verify the error message was logged by the except block
+    mock_logger_info.assert_any_call("Checking/Creating database tables...")
+    mock_logger_error.assert_any_call(f"Error creating database tables: {test_error_message}")
 
     # Reload again without the patch to restore normal state
     mock_create_all.side_effect = None

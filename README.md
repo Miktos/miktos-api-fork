@@ -19,6 +19,9 @@ Miktós provides a unified interface to interact with multiple AI models (OpenAI
 - **Request History**: Store and retrieve conversation history by project
 - **Error Handling**: Consistent error responses across all providers
 - **Rate Limiting**: Configurable rate limits to prevent abuse
+- **Admin Dashboard**: Comprehensive web-based admin interface for system monitoring and management
+- **Server Configuration**: Flexible configuration system for easy customization
+- **Graceful Shutdown**: Ensures proper resource cleanup and request completion
 
 ## Repository Structure
 
@@ -243,14 +246,42 @@ miktos_backend/
 │   ├── claude_client.py
 │   └── gemini_client.py
 ├── middleware/       # Middleware components
-│   └── rate_limiter.py
+│   ├── rate_limiter.py
+│   └── activity_logger.py
 ├── models/           # Database models
+│   └── database_models.py
 ├── repositories/     # Data access layer
+│   ├── base_repository.py
+│   ├── user_repository.py
+│   ├── project_repository.py
+│   ├── message_repository.py
+│   └── activity_repository.py
 ├── schemas/          # Pydantic schemas
+│   └── activity.py
 ├── services/         # Service layer
 ├── utils/            # Utility functions
 └── tests/            # Test suite
 ```
+
+## Admin Dashboard
+
+The system includes a comprehensive admin dashboard accessible at `/api/v1/admin` with the following features:
+
+### System Monitoring
+- **System Statistics**: User counts, message counts, project counts, and cache usage
+- **Health Checks**: Database, cache, and overall system health monitoring
+- **Process Information**: CPU usage, memory usage, and uptime for all server processes
+- **User Activity Tracking**: Comprehensive logs of user logins and API usage patterns
+
+### User Management
+- **User Listing**: View all users with basic information and activity status
+- **Project Statistics**: Track project counts and statuses across all users
+
+### Server Management
+- **Process Control**: View and manage running server processes with graceful shutdown
+- **Cache Management**: Invalidate model-specific cache entries when needed
+
+For detailed information on server configuration and administration, refer to the [SERVER_CONFIGURATION_ADMIN_DOCS.md](SERVER_CONFIGURATION_ADMIN_DOCS.md) document.
 
 ## Contributing
 

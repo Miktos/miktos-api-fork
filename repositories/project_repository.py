@@ -155,3 +155,18 @@ class ProjectRepository(BaseRepository[Project, ProjectCreate, ProjectUpdate]):
         self.db.commit()
         
         return deleted_project
+
+    # --- Admin Statistics Methods ---
+    def count(self) -> int:
+        """Count total number of projects."""
+        return self.db.query(self.model).count()
+
+    def count_by_status(self) -> Dict[str, int]:
+        """Count projects by context status."""
+        result = {}
+        for status in ContextStatus:
+            count = self.db.query(self.model).filter(
+                self.model.context_status == status
+            ).count()
+            result[status.name] = count
+        return result

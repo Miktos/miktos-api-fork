@@ -20,18 +20,76 @@ from config.settings import settings
 # Import the enhanced rate limiter
 from middleware.rate_limiter import create_rate_limiter, RateLimiterMiddleware
 
+# Import signal handling for graceful shutdown
+import signal
+import sys
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, settings.LOGGING.LEVEL),
+    format=settings.LOGGING.FORMAT
+)
+logger = logging.getLogger("miktos")
+
 # Create database tables if they don't exist (for development)
 def create_db_and_tables():
     # In production, you should use migrations (e.g., Alembic)
-    print("Checking/Creating database tables...")
+    logger.info("Checking/Creating database tables...")
     try:
         Base.metadata.create_all(bind=engine)
-        print("Database tables checked/created.")
+        logger.info("Database tables checked/created.")
     except Exception as e:
-        print(f"Error creating database tables: {e}")
+        logger.error(f"Error creating database tables: {e}")
 
-# Call table creation function (consider using lifespan events for more robustness)
+# Setup graceful shutdown
+def handle_shutdown(signum, frame):
+    """Handle graceful shutdown on termination signals."""
+    sig_name = signal.Signals(signum).name
+    logger.info(f"Received shutdown signal {sig_name} ({signum}), initiating graceful shutdown...")
+    sys.exit(0)
+
+# Register signal handlers for graceful shutdown
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
+
+# Call table creation function
 create_db_and_tables()
+
+# Define lifespan context manager for proper startup/shutdown
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan event handler for FastAPI app.
+    
+    This context manager runs code before the application starts
+    and after it shuts down, allowing for proper resource management.
+    """
+    # Startup: Create database tables, initialize connections, etc.
+    logger.info("Application starting up...")
+    
+    # Additional startup tasks can go here
+    # E.g., initialize cache connections, external services, etc.
+    
+    # Yield control back to FastAPI (app runs here)
+    yield
+    
+    # Shutdown: Release resources, close connections, etc.
+    logger.info("Application shutting down gracefully...")
+    
+    # Close database connections
+    try:
+        logger.info("Closing database connections...")
+        SessionLocal.remove()
+    except Exception as e:
+        logger.error(f"Error closing database connections: {e}")
+    
+    # Additional cleanup tasks can go here
+    # E.g., close cache connections, external services, etc.
+    logger.info("Cleanup complete. Goodbye!")
+
 
 # Initialize the FastAPI app
 app = FastAPI(
@@ -41,7 +99,8 @@ app = FastAPI(
     # --- Add OpenAPI URL for documentation ---
     openapi_url="/api/v1/openapi.json", # Standard practice to version the OpenAPI spec
     docs_url="/api/v1/docs",            # Serve Swagger UI under versioned path
-    redoc_url="/api/v1/redoc"           # Serve ReDoc under versioned path
+    redoc_url="/api/v1/redoc",          # Serve ReDoc under versioned path
+    lifespan=lifespan                   # Add lifespan event handling
 )
 
 # --- CORS Middleware ---
@@ -60,6 +119,10 @@ if not settings.is_testing():  # Skip in test environment
     from middleware.rate_limiter import RateLimiterMiddleware, get_rate_limiter_config
     rate_limit_config = get_rate_limiter_config()
     app.add_middleware(RateLimiterMiddleware, **rate_limit_config)
+
+# --- Add Activity Logger Middleware ---
+from middleware.activity_logger import ActivityLoggerMiddleware
+app.add_middleware(ActivityLoggerMiddleware)
 
 # --- Include API routers ---
 # Apply a consistent base prefix for all API V1 routes
